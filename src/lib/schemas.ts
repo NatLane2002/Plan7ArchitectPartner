@@ -50,6 +50,14 @@ export type Opening = z.infer<typeof OpeningSchema>;
 export type Footprint = z.infer<typeof FootprintSchema>;
 export type FloorPlan = z.infer<typeof FloorPlanSchema>;
 
+export interface UserInput {
+  natural_language: string;
+  square_footage?: number;
+  num_bedrooms?: number;
+  num_bathrooms?: number;
+  style?: string;
+}
+
 // Returns a minified string representation of the schema for the LLM prompt
 export function getPromptSystemInstruction(): string {
   return `You are a Master Architect designing highly realistic, precise floor plans.
