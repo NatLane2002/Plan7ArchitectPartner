@@ -3,6 +3,7 @@ import { FloorPlanSchema } from "@/lib/schemas";
 import { generateFloorPlanGeometry } from "@/lib/bsp-engine";
 import { generateDXF } from "@/lib/dxf-writer";
 import { generateSVGPreview } from "@/lib/svg-preview";
+import { formatValidationErrors } from "@/lib/validators";
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,10 +16,14 @@ export async function POST(request: NextRequest) {
     // Phase 2: Validate the Gemini JSON input directly
     const parseResult = FloorPlanSchema.safeParse(body);
     if (!parseResult.success) {
+      const zodErrors = parseResult.error.flatten();
+      const formattedErrors = parseResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('\n');
+      
       return NextResponse.json(
         {
-          error: "Validation failed on Gemini JSON",
-          details: parseResult.error.flatten().fieldErrors,
+          error: "Validation failed on AI JSON output",
+          message: formattedErrors || "The floor plan contains structural or geometric errors.",
+          details: zodErrors.fieldErrors,
         },
         { status: 400 }
       );
@@ -61,6 +66,8 @@ export async function POST(request: NextRequest) {
             "DOORS",
             "WINDOWS",
             "LABELS",
+            "DIMENSIONS",
+            "ROOM_FILLS",
           ],
         },
       });

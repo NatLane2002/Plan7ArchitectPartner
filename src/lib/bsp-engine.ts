@@ -240,30 +240,104 @@ function findSharedEdge(
   b: Rect,
   intThickness: number
 ): { x1: number; y1: number; x2: number; y2: number } | null {
-  const tolerance = intThickness + 10;
+  // CRITICAL FIX: Use FULL wall thickness + small epsilon for floating-point safety
+  // When rooms are adjacent on a grid, the gap between them equals the wall thickness
+  const tolerance = intThickness * 1.5; // 1.5x to handle floating-point conversion errors
 
+  // Check if Room A's right edge is adjacent to Room B's left edge (vertical wall)
   if (Math.abs(a.x + a.width - b.x) < tolerance) {
     const overlapY1 = Math.max(a.y, b.y);
     const overlapY2 = Math.min(a.y + a.height, b.y + b.height);
-    if (overlapY2 > overlapY1) return { x1: a.x + a.width, y1: overlapY1, x2: a.x + a.width, y2: overlapY2 };
+    if (overlapY2 > overlapY1) {
+      const wallX = (a.x + a.width + b.x) / 2; // Midpoint between the two edges
+      return { x1: wallX, y1: overlapY1, x2: wallX, y2: overlapY2 };
+    }
   }
   
+  // Check if Room B's right edge is adjacent to Room A's left edge (vertical wall)
   if (Math.abs(b.x + b.width - a.x) < tolerance) {
     const overlapY1 = Math.max(a.y, b.y);
     const overlapY2 = Math.min(a.y + a.height, b.y + b.height);
-    if (overlapY2 > overlapY1) return { x1: b.x + b.width, y1: overlapY1, x2: b.x + b.width, y2: overlapY2 };
+    if (overlapY2 > overlapY1) {
+      const wallX = (b.x + b.width + a.x) / 2; // Midpoint between the two edges
+      return { x1: wallX, y1: overlapY1, x2: wallX, y2: overlapY2 };
+    }
   }
 
+  // Check if Room A's bottom edge is adjacent to Room B's top edge (horizontal wall)
   if (Math.abs(a.y + a.height - b.y) < tolerance) {
     const overlapX1 = Math.max(a.x, b.x);
     const overlapX2 = Math.min(a.x + a.width, b.x + b.width);
-    if (overlapX2 > overlapX1) return { x1: overlapX1, y1: a.y + a.height, x2: overlapX2, y2: a.y + a.height };
+    if (overlapX2 > overlapX1) {
+      const wallY = (a.y + a.height + b.y) / 2; // Midpoint between the two edges
+      return { x1: overlapX1, y1: wallY, x2: overlapX2, y2: wallY };
+    }
   }
 
+  // Check if Room B's bottom edge is adjacent to Room A's top edge (horizontal wall)
   if (Math.abs(b.y + b.height - a.y) < tolerance) {
     const overlapX1 = Math.max(a.x, b.x);
     const overlapX2 = Math.min(a.x + a.width, b.x + b.width);
-    if (overlapX2 > overlapX1) return { x1: overlapX1, y1: b.y + b.height, x2: overlapX2, y2: b.y + b.height };
+    if (overlapX2 > overlapX1) {
+      const wallY = (b.y + b.height + a.y) / 2; // Midpoint between the two edges
+      return { x1: overlapX1, y1: wallY, x2: overlapX2, y2: wallY };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * BRUTE-FORCE FALLBACK: When geometric intersection fails due to floating-point
+ * errors or coordinate misalignment, this function uses a more aggressive approach
+ * to find adjacent rooms by checking if they're within a larger tolerance zone.
+ */
+function findSharedEdgeBruteForce(
+  a: Rect,
+  b: Rect,
+  intThickness: number
+): { x1: number; y1: number; x2: number; y2: number } | null {
+  // Use a much larger tolerance to catch edge cases (3x wall thickness)
+  const tolerance = intThickness * 3;
+
+  // Check vertical adjacency (rooms side-by-side)
+  const verticalGap = Math.min(
+    Math.abs(a.x + a.width - b.x),
+    Math.abs(b.x + b.width - a.x)
+  );
+  
+  if (verticalGap < tolerance) {
+    const overlapY1 = Math.max(a.y, b.y);
+    const overlapY2 = Math.min(a.y + a.height, b.y + b.height);
+    
+    if (overlapY2 - overlapY1 > 300) { // At least 300mm overlap (1ft)
+      // Determine which room is on the left
+      const wallX = a.x + a.width < b.x + b.width 
+        ? (a.x + a.width + b.x) / 2 
+        : (b.x + b.width + a.x) / 2;
+      
+      return { x1: wallX, y1: overlapY1, x2: wallX, y2: overlapY2 };
+    }
+  }
+
+  // Check horizontal adjacency (rooms stacked vertically)
+  const horizontalGap = Math.min(
+    Math.abs(a.y + a.height - b.y),
+    Math.abs(b.y + b.height - a.y)
+  );
+  
+  if (horizontalGap < tolerance) {
+    const overlapX1 = Math.max(a.x, b.x);
+    const overlapX2 = Math.min(a.x + a.width, b.x + b.width);
+    
+    if (overlapX2 - overlapX1 > 300) { // At least 300mm overlap (1ft)
+      // Determine which room is on top
+      const wallY = a.y + a.height < b.y + b.height 
+        ? (a.y + a.height + b.y) / 2 
+        : (b.y + b.height + a.y) / 2;
+      
+      return { x1: overlapX1, y1: wallY, x2: overlapX2, y2: wallY };
+    }
   }
 
   return null;
@@ -303,8 +377,20 @@ function placeOpenings(
     // Only place shared opening if on the same level
     if (room1.level !== room2.level) continue;
 
-    const edge = findSharedEdge(room1.rect, room2.rect, intThickness);
-    if (!edge) continue;
+    let edge = findSharedEdge(room1.rect, room2.rect, intThickness);
+    
+    // PRAGMATIC FALLBACK: If geometric intersection fails, use brute-force grid logic
+    if (!edge) {
+      edge = findSharedEdgeBruteForce(room1.rect, room2.rect, intThickness);
+      if (edge) {
+        console.warn(`[BSP] Geometric edge detection failed for ${roomId1} <-> ${roomId2}, using brute-force fallback`);
+      }
+    }
+    
+    if (!edge) {
+      console.error(`[BSP] CRITICAL: Cannot find shared edge between ${roomId1} and ${roomId2}. Door placement failed.`);
+      continue;
+    }
 
     const isVertical = Math.abs(edge.x1 - edge.x2) < 1;
     const centerX = (edge.x1 + edge.x2) / 2;
@@ -348,7 +434,8 @@ function placeOnExteriorWall(
     maxY: r.y + r.height
   };
 
-  const tol = 100;
+  // Dynamic tolerance: half of exterior wall thickness
+  const tol = extThickness * 0.5;
   
   // Try to find a valid segment matching this room
   for (const w of extWalls) {

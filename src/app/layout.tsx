@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Plan7 Architect Partner — Text-to-CAD Floor Plans",
+  title: "ArchDraft Universal — Professional CAD Pre-Processor",
   description:
-    "Generate production-ready DXF floor plans from natural language. Powered by AI parsing and deterministic BSP geometry for Plan 7 Architektur Pro.",
+    "Generate production-ready, industry-standard DXF floor plans from natural language. AI-powered geometry engine with universal CAD compatibility for AutoCAD, Revit, Chief Architect, and SketchUp.",
 };
 
 export default function RootLayout({

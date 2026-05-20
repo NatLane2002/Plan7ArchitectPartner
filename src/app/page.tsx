@@ -155,7 +155,7 @@ Please generate the JSON floor plan based exactly on this client requirement:
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `plan7-${Date.now()}.dxf`;
+      a.download = `archdraft-${Date.now()}.dxf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -172,15 +172,15 @@ Please generate the JSON floor plan based exactly on this client requirement:
   function renderStatusBadge() {
     const configs: Record<AppStatus, { label: string; class: string; icon: string }> = {
       idle: { label: "Ready", class: "status-badge-idle", icon: "○" },
-      generating: { label: `Translating JSON... ${elapsedTime}s`, class: "status-badge-working", icon: "◉" },
+      generating: { label: `Processing ${elapsedTime}s`, class: "status-badge-working", icon: "◉" },
       preview: { label: "Preview Ready", class: "status-badge-done", icon: "✓" },
-      downloading: { label: `Exporting DXF... ${elapsedTime}s`, class: "status-badge-working", icon: "◉" },
+      downloading: { label: `Exporting ${elapsedTime}s`, class: "status-badge-working", icon: "◉" },
       error: { label: "Error", class: "status-badge-error", icon: "✕" },
     };
     const cfg = configs[status];
     return (
       <span className={`status-badge ${cfg.class}`}>
-        <span>{cfg.icon}</span>
+        <span className="status-icon">{cfg.icon}</span>
         {cfg.label}
       </span>
     );
@@ -188,65 +188,60 @@ Please generate the JSON floor plan based exactly on this client requirement:
 
   return (
     <>
-    <div className="min-h-screen relative overflow-hidden">
+    <div className="workspace-container">
       {/* Ambient glow orbs */}
       <div className="glow-orb glow-orb-1" />
       <div className="glow-orb glow-orb-2" />
 
       {/* ── Header ── */}
-      <header className="relative z-10 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/80 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            {/* Logo */}
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#6366f1] to-[#a855f7] flex items-center justify-center shadow-lg shadow-[var(--color-accent-glow)]">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-[var(--color-text-primary)] tracking-tight">
-                Plan7 Architect<span className="text-[var(--color-accent)]">Partner</span>
-              </h1>
-              <p className="text-xs text-[var(--color-text-muted)] tracking-wide">
-                AI-ENHANCED · DXF CAD GENERATOR
-              </p>
-            </div>
+      <header className="workspace-header">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+            </svg>
           </div>
-          <div className="flex items-center gap-4">
-            {renderStatusBadge()}
+          <div>
+            <h1 className="text-base font-semibold text-zinc-50 tracking-tight leading-none">
+              ArchDraft <span className="text-indigo-400">Universal</span>
+            </h1>
+            <p className="text-[10px] text-zinc-500 tracking-widest uppercase font-medium mt-0.5">
+              Universal CAD Pre-Processor
+            </p>
           </div>
+        </div>
+        <div className="flex items-center gap-4">
+          {renderStatusBadge()}
         </div>
       </header>
 
-      {/* ── Main Content ── */}
-      <main className="relative z-10 max-w-7xl mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          {/* ─── Left Panel: AI Workflow Workspace ─── */}
-          <div className="lg:col-span-5 space-y-6 animate-fade-in">
+      {/* ── 3-Pane Workspace Layout ── */}
+      <main className="workspace-main">
+        
+        {/* ─── LEFT SIDEBAR: Input/Workflow Pane ─── */}
+        <aside className="workspace-sidebar-left">
+          <div className="sidebar-content">
             
-            {/* Step 1: Create prompt */}
-            <div className="glass-card p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-6 h-6 rounded-md bg-[var(--color-accent)]/20 flex items-center justify-center">
-                  <span className="text-xs font-bold text-[var(--color-accent)]">1</span>
-                </div>
-                <h2 className="text-sm font-semibold text-[var(--color-text-primary)] uppercase tracking-wider">
-                  Describe Floor Plan
-                </h2>
+            {/* Step 1: Describe */}
+            <section className="workflow-section">
+              <div className="section-header">
+                <div className="step-badge step-badge-1">1</div>
+                <h2 className="section-title">Describe Floor Plan</h2>
               </div>
               <textarea
-                className="textarea-field min-h-[100px]"
+                className="workflow-textarea"
                 value={naturalLanguage}
                 onChange={(e) => setNaturalLanguage(e.target.value)}
                 placeholder="Describe your floor plan in plain English..."
-                rows={3}
+                rows={4}
+                aria-label="Floor plan description"
               />
               <button
-                className="btn-secondary w-full mt-4 flex items-center justify-center gap-2"
+                type="button"
+                className="workflow-button workflow-button-secondary"
                 onClick={handleGeneratePrompt}
                 disabled={!naturalLanguage.trim()}
               >
@@ -255,331 +250,306 @@ Please generate the JSON floor plan based exactly on this client requirement:
                 </svg>
                 Generate LLM Prompt
               </button>
-            </div>
+            </section>
 
             {/* Step 2: Copy Prompt */}
             {generatedPrompt && (
-              <div className="glass-card p-6 animate-fade-in">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="w-6 h-6 rounded-md bg-[var(--color-cyan)]/20 flex items-center justify-center">
-                    <span className="text-xs font-bold text-[var(--color-cyan)]">2</span>
-                  </div>
-                  <h2 className="text-sm font-semibold text-[var(--color-text-primary)] uppercase tracking-wider">
-                    Take to Google Gemini
-                  </h2>
+              <section className="workflow-section animate-fade-in">
+                <div className="section-header">
+                  <div className="step-badge step-badge-2">2</div>
+                  <h2 className="section-title">Take to AI Assistant</h2>
                 </div>
                 <div className="relative">
                   <textarea
                     readOnly
                     value={generatedPrompt}
-                    className="textarea-field text-xs font-mono h-32 overflow-y-auto bg-black/30 border-black shadow-inner"
+                    className="workflow-textarea workflow-textarea-readonly"
+                    rows={6}
+                    aria-label="Generated AI prompt"
                   />
-                  <div className="absolute top-2 right-2">
-                    <button onClick={handleCopyPrompt} className="px-3 py-1.5 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white text-xs font-bold rounded shadow transition-colors">
-                      Copy Prompt
-                    </button>
-                  </div>
+                  <button 
+                    type="button"
+                    onClick={handleCopyPrompt} 
+                    className="absolute top-2 right-2 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold rounded-md shadow-sm transition-colors"
+                  >
+                    Copy
+                  </button>
                 </div>
-                <p className="mt-3 text-xs text-[var(--color-text-muted)] text-center">
-                  Copy the above and run it in Google Gemini, ChatGPT, or Claude.
+                <p className="workflow-hint">
+                  Paste into Gemini, ChatGPT, or Claude
                 </p>
-              </div>
+              </section>
             )}
 
             {/* Step 3: Paste JSON */}
-            <div className="glass-card p-6 animate-fade-in animate-fade-in-delay-1">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-6 h-6 rounded-md bg-[var(--color-success)]/20 flex items-center justify-center">
-                  <span className="text-xs font-bold text-[var(--color-success)]">3</span>
-                </div>
-                <h2 className="text-sm font-semibold text-[var(--color-text-primary)] uppercase tracking-wider">
-                  Paste AI JSON Result
-                </h2>
+            <section className="workflow-section animate-fade-in">
+              <div className="section-header">
+                <div className="step-badge step-badge-3">3</div>
+                <h2 className="section-title">Paste AI JSON Result</h2>
               </div>
               <textarea
-                className="textarea-field font-mono text-xs mb-4"
+                className="workflow-textarea workflow-textarea-code"
                 value={pastedJson}
                 onChange={(e) => setPastedJson(e.target.value)}
                 placeholder='{\n  "project_title": "...",\n  "rooms": [...]\n}'
-                rows={8}
+                rows={10}
                 spellCheck={false}
+                aria-label="AI JSON output"
               />
               
               <button
-                className="btn-primary w-full"
+                type="button"
+                className="workflow-button workflow-button-primary"
                 onClick={handlePreview}
                 disabled={status === "generating" || status === "downloading" || !pastedJson.trim()}
               >
-                <span className="flex items-center justify-center gap-2">
-                  {status === "generating" ? (
-                    <>
-                      <div className="pulse-loader">
-                        <span></span><span></span><span></span>
-                      </div>
-                      Validating & Processing...
-                    </>
-                  ) : (
-                    <>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                      </svg>
-                      Validate & Generate Floor Plan
-                    </>
-                  )}
-                </span>
+                {status === "generating" ? (
+                  <>
+                    <div className="pulse-loader">
+                      <span></span><span></span><span></span>
+                    </div>
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </svg>
+                    Validate & Generate
+                  </>
+                )}
               </button>
-            </div>
+            </section>
 
             {/* Error Display */}
             {error && (
-              <div className="bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30 rounded-xl p-4 animate-fade-in">
+              <div className="error-card animate-fade-in">
                 <div className="flex items-start gap-3">
-                  <span className="text-[var(--color-danger)] text-lg">⚠</span>
-                  <div className="w-full truncate whitespace-normal">
-                    <p className="text-sm font-medium text-[var(--color-danger)]">Validation Error</p>
-                    <p className="text-xs text-[var(--color-text-secondary)] mt-1 break-words whitespace-pre-wrap">{error}</p>
+                  <span className="text-red-400 text-base flex-shrink-0">⚠</span>
+                  <div>
+                    <p className="text-sm font-semibold text-red-400">Validation Error</p>
+                    <p className="text-xs text-zinc-400 mt-1 break-words">{error}</p>
                   </div>
                 </div>
               </div>
             )}
           </div>
+        </aside>
 
-          {/* ─── Right Panel: Preview & Results ─── */}
-          <div className="lg:col-span-7 space-y-6 animate-fade-in animate-fade-in-delay-1">
-            {/* Preview Area */}
-            <div className="glass-card overflow-hidden">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)]">
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-md bg-[#f59e0b]/20 flex items-center justify-center">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2">
-                      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                      <line x1="8" y1="21" x2="16" y2="21" />
-                      <line x1="12" y1="17" x2="12" y2="21" />
-                    </svg>
-                  </div>
-                  <h2 className="text-sm font-semibold text-[var(--color-text-primary)] uppercase tracking-wider">
-                    Real-time Floor Plan Visualizer
-                  </h2>
-                </div>
-                <div className="flex items-center gap-4">
-                  {previewData && (
-                    <span className="text-xs text-[var(--color-text-muted)] font-mono">
-                       Footprint: {previewData.metadata.footprint.width_ft}&apos; × {previewData.metadata.footprint.length_ft}&apos;
-                    </span>
-                  )}
-                  {previewData && (
-                     <button
-                        onClick={() => setIsFullscreen(true)}
-                        className="flex items-center justify-center p-2 rounded-md hover:bg-white/10 transition-colors text-[var(--color-text-muted)] hover:text-white border border-[var(--color-border)] bg-[var(--color-bg-input)]"
-                        title="Enter Fullscreen"
-                     >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-                     </button>
-                  )}
-                </div>
+        {/* ─── CENTER CANVAS: The Hero Visualizer ─── */}
+        <section className="workspace-canvas">
+          <div className="canvas-header">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded bg-amber-500/20 flex items-center justify-center">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.5">
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
               </div>
-
-              <div className="floor-plan-preview" style={{ minHeight: "460px" }}>
-                {!previewData && status !== "generating" && (
-                  <div className="flex items-center justify-center h-[460px] text-[var(--color-text-muted)]">
-                    <div className="text-center space-y-3">
-                      <svg className="mx-auto opacity-30" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-                        <rect x="3" y="3" width="7" height="7" />
-                        <rect x="14" y="3" width="7" height="7" />
-                        <rect x="3" y="14" width="7" height="7" />
-                        <rect x="14" y="14" width="7" height="7" />
-                      </svg>
-                      <p className="text-sm">Your AI geometry preview will appear here</p>
-                      <p className="text-xs opacity-60">Paste the valid JSON and click Validate</p>
-                    </div>
-                  </div>
-                )}
-
-                {status === "generating" && (
-                  <div className="flex items-center justify-center h-[460px]">
-                    <div className="text-center space-y-4">
-                      <div className="relative">
-                        <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-hover)] animate-pulse opacity-50" />
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <div className="pulse-loader">
-                            <span></span><span></span><span></span>
-                          </div>
-                        </div>
-                      </div>
-                      <p className="text-sm text-[var(--color-text-secondary)]">
-                        Running BSP subdivision constraints...
-                      </p>
-                      <p className="text-xs text-[var(--color-text-muted)] font-mono">
-                        {elapsedTime}s elapsed
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {previewData && (
-                  <div
-                    className="w-full h-full relative block"
-                  >
-                     <div className="absolute top-2 left-4 text-white text-xs opacity-60 shadow-lg px-2 rounded-lg py-1 bg-black/40 border border-white/10 z-20 pointer-events-none">
-                       {previewData.metadata.project_title} - {previewData.metadata.architectural_style}
-                     </div>
-                     <div dangerouslySetInnerHTML={{ __html: previewData.preview }} className="w-full h-full" style={{ display: 'block' }} />
-                  </div>
-                )}
-              </div>
+              <h2 className="canvas-title">Floor Plan Visualizer</h2>
             </div>
-
-            {/* Fullscreen Backdrop previously here is moved out to react portal equivalent layer */}
-
-            {/* Metadata Panel */}
             {previewData && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in">
-                {/* Room List */}
-                <div className="glass-card p-5">
-                  <div className="flex justify-between items-center mb-3">
-                    <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-                      Calculated Space Breakdown
-                    </h3>
-                    <span className="text-[10px] bg-black/30 px-2 py-1 rounded-md text-[var(--color-accent)] font-mono font-bold">
-                      {previewData.metadata.room_count} ROOMS TOTAL
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] text-zinc-500 font-mono tracking-wide">
+                  {previewData.metadata.footprint.width_ft}&apos; × {previewData.metadata.footprint.length_ft}&apos;
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsFullscreen(true)}
+                  className="p-1.5 rounded hover:bg-white/5 transition-colors text-zinc-500 hover:text-zinc-300"
+                  title="Enter Fullscreen"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="canvas-viewport">
+            {!previewData && status !== "generating" && (
+              <div className="canvas-empty-state">
+                <svg className="opacity-20" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
+                  <rect x="3" y="3" width="7" height="7" />
+                  <rect x="14" y="3" width="7" height="7" />
+                  <rect x="3" y="14" width="7" height="7" />
+                  <rect x="14" y="14" width="7" height="7" />
+                </svg>
+                <p className="text-sm text-zinc-500 mt-4">Your floor plan will appear here</p>
+                <p className="text-xs text-zinc-600 mt-1">Paste valid JSON and click Validate</p>
+              </div>
+            )}
+
+            {status === "generating" && (
+              <div className="canvas-loading-state">
+                <div className="relative">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 animate-pulse opacity-40" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="pulse-loader">
+                      <span></span><span></span><span></span>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-sm text-zinc-400 mt-4">Running BSP subdivision...</p>
+                <p className="text-xs text-zinc-600 font-mono mt-1">{elapsedTime}s elapsed</p>
+              </div>
+            )}
+
+            {previewData && (
+              <div className="canvas-preview">
+                <div className="canvas-overlay-label">
+                  {previewData.metadata.project_title} - {previewData.metadata.architectural_style}
+                </div>
+                <div dangerouslySetInnerHTML={{ __html: previewData.preview }} className="w-full h-full" />
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ─── RIGHT SIDEBAR: Inspector & Export Pane ─── */}
+        <aside className="workspace-sidebar-right">
+          <div className="sidebar-content">
+            
+            {previewData ? (
+              <>
+                {/* Room Breakdown */}
+                <section className="inspector-section">
+                  <div className="inspector-header">
+                    <h3 className="inspector-title">Space Breakdown</h3>
+                    <span className="inspector-badge">
+                      {previewData.metadata.room_count} ROOMS
                     </span>
                   </div>
-                  <div className="space-y-4 max-h-[260px] overflow-y-auto pr-2">
+                  <div className="inspector-list">
                     {[...new Set(previewData.metadata.rooms.map((r) => r.level))].sort().map((level) => (
                       <div key={level} className="space-y-2">
-                        <div className="text-[10px] tracking-widest text-[#a855f7] font-bold border-b border-[#a855f7]/20 pb-1 mb-2">
-                          LEVEL {level}
-                        </div>
+                        <div className="level-label">LEVEL {level}</div>
                         {previewData.metadata.rooms.filter(r => r.level === level).map((room, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] transition-colors"
-                          >
-                            <span className="text-sm text-[var(--color-text-primary)]">
-                              {room.name}
-                            </span>
-                            <div className="flex flex-col items-end gap-1">
-                              <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
-                                Target: {room.target_sqft} ft²
-                              </span>
-                              <span className="text-xs text-[var(--color-cyan)] font-mono font-bold">
-                                Actual: {room.actual_sqft} ft²
-                              </span>
+                          <div key={i} className="room-item">
+                            <span className="room-name">{room.name}</span>
+                            <div className="room-metrics">
+                              <span className="room-metric-label">Target: {room.target_sqft} ft²</span>
+                              <span className="room-metric-value">{room.actual_sqft} ft²</span>
                             </div>
                           </div>
                         ))}
                       </div>
                     ))}
                   </div>
-                </div>
+                </section>
 
-                {/* DXF Details + Download */}
-                <div className="glass-card p-5 flex flex-col justify-between">
-                  <div>
-                    <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">
-                      DXF Payload Integrity
-                    </h3>
-                    <div className="space-y-3">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-[var(--color-text-secondary)]">Format</span>
-                        <span className="text-[var(--color-text-primary)] font-mono">AutoCAD DXF AC1015</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-[var(--color-text-secondary)]">Total SQFT</span>
-                        <span className="text-[var(--color-success)] font-mono font-bold">{previewData.metadata.footprint.total_sqft}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-[var(--color-text-secondary)]">Walls Drawn</span>
-                        <span className="text-[var(--color-text-primary)] font-mono">{previewData.metadata.wall_count}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-[var(--color-text-secondary)]">Openings</span>
-                        <span className="text-[var(--color-text-primary)] font-mono">{previewData.metadata.opening_count}</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-[var(--color-border)]">
-                        {previewData.metadata.layers.map((layer) => (
-                          <span
-                            key={layer}
-                            className="px-2 py-1 text-[10px] font-mono rounded-md bg-[var(--color-bg-input)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
-                          >
-                            {layer}
-                          </span>
-                        ))}
-                      </div>
+                {/* DXF Integrity */}
+                <section className="inspector-section">
+                  <div className="inspector-header">
+                    <h3 className="inspector-title">DXF Payload</h3>
+                  </div>
+                  <div className="inspector-data">
+                    <div className="data-row">
+                      <span className="data-label">Format</span>
+                      <span className="data-value font-mono text-xs">AC1015</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="data-label">Total SQFT</span>
+                      <span className="data-value font-mono text-emerald-400 font-semibold">{previewData.metadata.footprint.total_sqft}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="data-label">Walls</span>
+                      <span className="data-value font-mono">{previewData.metadata.wall_count}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="data-label">Openings</span>
+                      <span className="data-value font-mono">{previewData.metadata.opening_count}</span>
+                    </div>
+                    <div className="data-layers">
+                      {previewData.metadata.layers.map((layer) => (
+                        <span key={layer} className="layer-tag">{layer}</span>
+                      ))}
                     </div>
                   </div>
-                  
-                  <div className="mt-4">
-                    <button
-                      id="download-dxf-btn"
-                      className="btn-primary w-full"
-                      onClick={handleDownload}
-                      disabled={status === "downloading"}
-                    >
-                      <span className="flex items-center justify-center gap-2">
-                        {status === "downloading" ? (
-                          <>
-                            <div className="pulse-loader"><span></span><span></span><span></span></div>
-                            Exporting...
-                          </>
-                        ) : (
-                          <>
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            Download strictly layered .DXF
-                          </>
-                        )}
-                      </span>
-                    </button>
-                  </div>
-                </div>
+                </section>
+
+                {/* Download CTA */}
+                <button
+                  type="button"
+                  className="download-button"
+                  onClick={handleDownload}
+                  disabled={status === "downloading"}
+                >
+                  {status === "downloading" ? (
+                    <>
+                      <div className="pulse-loader">
+                        <span></span><span></span><span></span>
+                      </div>
+                      Exporting...
+                    </>
+                  ) : (
+                    <>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                      Download DXF
+                    </>
+                  )}
+                </button>
+              </>
+            ) : (
+              <div className="inspector-empty">
+                <svg className="opacity-10" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="12" y1="18" x2="12" y2="12" />
+                  <line x1="9" y1="15" x2="15" y2="15" />
+                </svg>
+                <p className="text-xs text-zinc-600 mt-3">Inspector data will appear here</p>
               </div>
             )}
           </div>
-        </div>
+        </aside>
       </main>
     </div>
 
+    {/* Fullscreen Modal */}
     {isFullscreen && previewData && (
       <>
-        <div className="fixed inset-0 bg-black/90 z-[998] cursor-pointer" onClick={() => setIsFullscreen(false)} />
-        <div className="fixed inset-4 z-[999] flex flex-col bg-[var(--color-bg-primary)] p-4 rounded-xl border border-[var(--color-border)] shadow-2xl">
-           <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)]">
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-md bg-[#f59e0b]/20 flex items-center justify-center">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2">
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                    <line x1="8" y1="21" x2="16" y2="21" />
-                    <line x1="12" y1="17" x2="12" y2="21" />
-                  </svg>
-                </div>
-                <h2 className="text-sm font-semibold text-[var(--color-text-primary)] uppercase tracking-wider">
-                  Fullscreen Visualizer
-                </h2>
+        <div className="fullscreen-backdrop" onClick={() => setIsFullscreen(false)} />
+        <div className="fullscreen-modal">
+          <div className="fullscreen-header">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded bg-amber-500/20 flex items-center justify-center">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.5">
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
               </div>
-              <div className="flex items-center gap-4">
-                <span className="text-xs text-[var(--color-text-muted)] font-mono">
-                   Footprint: {previewData.metadata.footprint.width_ft}&apos; × {previewData.metadata.footprint.length_ft}&apos;
-                </span>
-                <button
-                   onClick={() => setIsFullscreen(false)}
-                   className="flex items-center justify-center p-2 rounded-md hover:bg-white/10 transition-colors text-[var(--color-text-muted)] hover:text-white border border-[var(--color-border)] bg-[var(--color-bg-input)]"
-                   title="Exit Fullscreen"
-                >
-                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
-                </button>
-              </div>
+              <h2 className="canvas-title">Fullscreen Visualizer</h2>
             </div>
-
-            <div className="w-full h-full relative block flex-1 max-h-none">
-               <div className="absolute top-2 left-4 text-white text-xs opacity-60 shadow-lg px-2 rounded-lg py-1 bg-black/40 border border-white/10 z-20 pointer-events-none">
-                 {previewData.metadata.project_title} - {previewData.metadata.architectural_style}
-               </div>
-               <div dangerouslySetInnerHTML={{ __html: previewData.preview }} className="w-full h-full [&>svg]:w-full [&>svg]:h-full" style={{ display: 'block' }} />
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] text-zinc-500 font-mono">
+                {previewData.metadata.footprint.width_ft}&apos; × {previewData.metadata.footprint.length_ft}&apos;
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsFullscreen(false)}
+                className="p-1.5 rounded hover:bg-white/5 transition-colors text-zinc-500 hover:text-zinc-300"
+                title="Exit Fullscreen"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+                </svg>
+              </button>
             </div>
+          </div>
+          <div className="fullscreen-content">
+            <div className="canvas-overlay-label">
+              {previewData.metadata.project_title} - {previewData.metadata.architectural_style}
+            </div>
+            <div dangerouslySetInnerHTML={{ __html: previewData.preview }} className="w-full h-full [&>svg]:w-full [&>svg]:h-full" />
+          </div>
         </div>
       </>
     )}

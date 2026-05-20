@@ -1,28 +1,24 @@
 /**
- * SVG Preview Generator
+ * SVG Preview Generator for ArchDraft Universal
  *
  * Renders the floor plan geometry as an SVG string for in-browser preview.
  * Color-matched to the DXF layer colors but adapted for dark backgrounds.
+ * Includes interactive tooltips for room metadata.
  */
 
 import type { FloorPlanGeometry } from "./bsp-engine";
 
+const FT_TO_MM = 304.8;
+
 const PREVIEW_COLORS = {
-  background: "#0d1322",
-  exterior_walls: "#e2e8f0",
-  interior_walls: "#64748b",
-  doors: "#f87171",
-  windows: "#38bdf8",
-  labels: "#4ade80",
+  background: "#000000",
+  exterior_walls: "#e4e4e7", // zinc-200 - crisp white walls
+  interior_walls: "#a1a1aa", // zinc-400 - muted gray
+  doors: "#b91c1c", // Deep crimson (muted red)
+  windows: "#60a5fa", // Softer steel blue
+  labels: "#fafafa", // Pure white labels
   room_fills: [
-    "rgba(99, 102, 241, 0.08)",
-    "rgba(34, 211, 238, 0.08)",
-    "rgba(168, 85, 247, 0.08)",
-    "rgba(251, 146, 60, 0.08)",
-    "rgba(74, 222, 128, 0.08)",
-    "rgba(251, 113, 133, 0.08)",
-    "rgba(96, 165, 250, 0.08)",
-    "rgba(253, 224, 71, 0.08)",
+    "rgba(255, 255, 255, 0.03)", // Uniform transparent fill - focus on walls
   ],
 };
 
@@ -56,10 +52,14 @@ export function generateSVGPreview(
   // Background
   svg += `<rect width="${viewWidth}" height="${viewHeight}" fill="${PREVIEW_COLORS.background}" rx="8"/>`;
 
-  // Room fills
-  rooms.forEach((room, i) => {
-    const colorIdx = i % PREVIEW_COLORS.room_fills.length;
-    svg += `<rect class="preview-room" x="${tx(room.rect.x, room.level)}" y="${ty(room.rect.y + room.rect.height)}" width="${ts(room.rect.width)}" height="${ts(room.rect.height)}" fill="${PREVIEW_COLORS.room_fills[colorIdx]}" stroke="${PREVIEW_COLORS.interior_walls}" stroke-width="0.5" stroke-opacity="0.3"/>`;
+  // Room fills - uniform transparent fill, focus on walls
+  rooms.forEach((room) => {
+    svg += `<g class="preview-room-group">
+      <title>${escapeXml(room.name)} - Level ${room.level}
+Area: ${room.actual_area_sqft.toFixed(1)} sq ft
+Dimensions: ${(room.rect.width / FT_TO_MM).toFixed(1)}' × ${(room.rect.height / FT_TO_MM).toFixed(1)}'</title>
+      <rect class="preview-room" x="${tx(room.rect.x, room.level)}" y="${ty(room.rect.y + room.rect.height)}" width="${ts(room.rect.width)}" height="${ts(room.rect.height)}" fill="${PREVIEW_COLORS.room_fills[0]}" stroke="none"/>
+    </g>`;
   });
 
   // Walls (Both interior and exterior are now mathematically perfect segments)
@@ -83,7 +83,7 @@ export function generateSVGPreview(
     }
   }
 
-  // Room labels - precise clipping and layout using foreignObject
+  // Room labels - clean geometric sans-serif, perfectly centered
   for (const room of rooms) {
     const roomW = parseFloat(ts(room.rect.width));
     const roomH = parseFloat(ts(room.rect.height));
@@ -93,11 +93,11 @@ export function generateSVGPreview(
     svg += `
     <foreignObject x="${rx}" y="${ry}" width="${roomW}" height="${roomH}">
       <div xmlns="http://www.w3.org/1999/xhtml" style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; box-sizing: border-box; padding: 4px; overflow: hidden; pointer-events: none;">
-        <span style="color: ${PREVIEW_COLORS.labels}; font-family: Inter, sans-serif; font-size: 11px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,0.9); line-height: 1.2; word-wrap: break-word; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;">
+        <span style="color: ${PREVIEW_COLORS.labels}; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; font-size: 11px; font-weight: 500; text-shadow: 0 2px 4px rgba(0,0,0,0.95); line-height: 1.3; word-wrap: break-word; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;">
           ${escapeXml(room.name)}
         </span>
-        <span style="color: ${PREVIEW_COLORS.labels}; font-family: Inter, sans-serif; font-size: 9px; font-weight: 400; opacity: 0.8; text-shadow: 0 1px 2px rgba(0,0,0,0.9); margin-top: 2px;">
-          ${room.actual_area_sqft.toFixed(0)} sq ft
+        <span style="color: ${PREVIEW_COLORS.labels}; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 9px; font-weight: 400; opacity: 0.7; text-shadow: 0 1px 3px rgba(0,0,0,0.95); margin-top: 2px;">
+          ${room.actual_area_sqft.toFixed(0)} ft²
         </span>
       </div>
     </foreignObject>`;
@@ -110,18 +110,29 @@ export function generateSVGPreview(
     svg += `<text x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" fill="${PREVIEW_COLORS.labels}" font-family="Inter, sans-serif" font-size="12" font-weight="bold" opacity="0.5" text-anchor="middle">LEVEL ${l}</text>`;
   }
 
-  // Legend
+  // Legend - Clean inline row with blurred backdrop (moved to bottom-left via CSS in canvas)
   const legendX = 12;
-  const legendY = viewHeight - 60;
-  svg += `<rect x="${legendX}" y="${legendY}" width="130" height="50" fill="rgba(0,0,0,0.4)" rx="6"/>`;
-  svg += `<line x1="${legendX + 8}" y1="${legendY + 14}" x2="${legendX + 22}" y2="${legendY + 14}" stroke="${PREVIEW_COLORS.exterior_walls}" stroke-width="3"/>`;
-  svg += `<text x="${legendX + 28}" y="${legendY + 14}" fill="${PREVIEW_COLORS.exterior_walls}" font-size="8" font-family="Inter, sans-serif" dominant-baseline="central">Exterior</text>`;
-  svg += `<line x1="${legendX + 8}" y1="${legendY + 28}" x2="${legendX + 22}" y2="${legendY + 28}" stroke="${PREVIEW_COLORS.doors}" stroke-width="2"/>`;
-  svg += `<text x="${legendX + 28}" y="${legendY + 28}" fill="${PREVIEW_COLORS.doors}" font-size="8" font-family="Inter, sans-serif" dominant-baseline="central">Doors</text>`;
-  svg += `<line x1="${legendX + 75}" y1="${legendY + 14}" x2="${legendX + 89}" y2="${legendY + 14}" stroke="${PREVIEW_COLORS.windows}" stroke-width="2.5"/>`;
-  svg += `<text x="${legendX + 95}" y="${legendY + 14}" fill="${PREVIEW_COLORS.windows}" font-size="8" font-family="Inter, sans-serif" dominant-baseline="central">Windows</text>`;
-  svg += `<line x1="${legendX + 75}" y1="${legendY + 28}" x2="${legendX + 89}" y2="${legendY + 28}" stroke="${PREVIEW_COLORS.interior_walls}" stroke-width="2"/>`;
-  svg += `<text x="${legendX + 95}" y="${legendY + 28}" fill="${PREVIEW_COLORS.interior_walls}" font-size="8" font-family="Inter, sans-serif" dominant-baseline="central">Interior</text>`;
+  const legendY = viewHeight - 50;
+  svg += `<g class="svg-legend">`;
+  svg += `<rect x="${legendX}" y="${legendY}" width="280" height="36" fill="rgba(24, 24, 27, 0.6)" rx="6" style="backdrop-filter: blur(12px);"/>`;
+  
+  // Exterior walls
+  svg += `<line x1="${legendX + 10}" y1="${legendY + 18}" x2="${legendX + 28}" y2="${legendY + 18}" stroke="${PREVIEW_COLORS.exterior_walls}" stroke-width="3" stroke-linecap="round"/>`;
+  svg += `<text x="${legendX + 34}" y="${legendY + 18}" fill="${PREVIEW_COLORS.exterior_walls}" font-size="9" font-family="Inter, sans-serif" font-weight="500" dominant-baseline="central">Exterior</text>`;
+  
+  // Doors
+  svg += `<line x1="${legendX + 85}" y1="${legendY + 18}" x2="${legendX + 103}" y2="${legendY + 18}" stroke="${PREVIEW_COLORS.doors}" stroke-width="2.5" stroke-linecap="round"/>`;
+  svg += `<text x="${legendX + 109}" y="${legendY + 18}" fill="${PREVIEW_COLORS.doors}" font-size="9" font-family="Inter, sans-serif" font-weight="500" dominant-baseline="central">Doors</text>`;
+  
+  // Windows
+  svg += `<line x1="${legendX + 155}" y1="${legendY + 18}" x2="${legendX + 173}" y2="${legendY + 18}" stroke="${PREVIEW_COLORS.windows}" stroke-width="2.5" stroke-linecap="round"/>`;
+  svg += `<text x="${legendX + 179}" y="${legendY + 18}" fill="${PREVIEW_COLORS.windows}" font-size="9" font-family="Inter, sans-serif" font-weight="500" dominant-baseline="central">Windows</text>`;
+  
+  // Interior walls
+  svg += `<line x1="${legendX + 235}" y1="${legendY + 18}" x2="${legendX + 253}" y2="${legendY + 18}" stroke="${PREVIEW_COLORS.interior_walls}" stroke-width="2" stroke-linecap="round"/>`;
+  svg += `<text x="${legendX + 259}" y="${legendY + 18}" fill="${PREVIEW_COLORS.interior_walls}" font-size="9" font-family="Inter, sans-serif" font-weight="500" dominant-baseline="central">Interior</text>`;
+  
+  svg += `</g>`;
 
   svg += `</svg>`;
   return svg;

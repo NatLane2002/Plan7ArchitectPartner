@@ -1,6 +1,7 @@
 {
-  "name": "plan7-architect-partner",
+  "name": "archdraft-universal",
   "version": "1.0.0",
+  "description": "Professional AI-assisted geometry engine and universal CAD pre-processor",
   "private": true,
   "scripts": {
     "dev": "next dev",

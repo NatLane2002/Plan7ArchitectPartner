@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validateFloorPlan } from "./validators";
 
 // ── Highly Detailed Room Schema ──
 export const RoomSchema = z.object({
@@ -42,7 +43,20 @@ export const FloorPlanSchema = z.object({
   stories: z.number().int().min(1).max(3).default(1).describe("Number of floor levels in this plan"),
   rooms: z.array(RoomSchema).min(1).describe("List of all rooms defined in the floor plan"),
   openings: z.array(OpeningSchema).min(1).describe("List of all doors, windows, and passthroughs"),
-  construction_notes: z.string().describe("Any general layout notes for the drafts-person or Plan7 architect user."),
+  construction_notes: z.string().describe("Any general layout notes for the CAD professional or architect."),
+}).superRefine((data, ctx) => {
+  // Run comprehensive spatial validation
+  const errors = validateFloorPlan(data);
+  
+  for (const error of errors) {
+    if (error.severity === "error") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error.message,
+        path: error.field.split("."),
+      });
+    }
+  }
 });
 
 export type Room = z.infer<typeof RoomSchema>;

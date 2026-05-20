@@ -1,5 +1,5 @@
 /**
- * DXF Writer for Plan 7 Architektur Pro
+ * DXF Writer for ArchDraft Universal
  *
  * Generates a properly layered DXF file with:
  * - EXTERIOR_WALLS layer (color 7 / white, 250mm thick polylines)
@@ -7,12 +7,16 @@
  * - DOORS layer (color 1 / red)
  * - WINDOWS layer (color 5 / blue)
  * - LABELS layer (color 3 / green)
+ * - DIMENSIONS layer (color 6 / magenta)
+ * - ROOM_FILLS layer (color 251 / light grey)
  *
  * All geometry uses LWPOLYLINE for maximum CAD compatibility.
+ * Professional features: BLOCK definitions, XDATA metadata, HATCH patterns, DIMENSION entities.
  * Units: millimeters.
  */
 
 import type { FloorPlanGeometry, Rect, WallSegment, PlacedOpening } from "./bsp-engine";
+import { generateBlocksSection, insertBlock, generateXData, generateHatch, generateDimension } from "./dxf-blocks";
 
 // ── DXF Color Constants (AutoCAD Color Index) ──
 const COLORS = {
@@ -21,6 +25,7 @@ const COLORS = {
   DOORS: 1,           // Red
   WINDOWS: 5,         // Blue
   LABELS: 3,          // Green
+  DIMENSIONS: 6,      // Magenta
   ROOM_FILL: 251,     // Light grey
 } as const;
 
@@ -37,6 +42,8 @@ const LAYERS: LayerDef[] = [
   { name: "DOORS", color: COLORS.DOORS, lineType: "CONTINUOUS" },
   { name: "WINDOWS", color: COLORS.WINDOWS, lineType: "DASHED" },
   { name: "LABELS", color: COLORS.LABELS, lineType: "CONTINUOUS" },
+  { name: "DIMENSIONS", color: COLORS.DIMENSIONS, lineType: "CONTINUOUS" },
+  { name: "ROOM_FILLS", color: COLORS.ROOM_FILL, lineType: "CONTINUOUS" },
 ];
 
 /**
@@ -51,8 +58,8 @@ export function generateDXF(geometry: FloorPlanGeometry): string {
   // TABLES section (layers, line types, styles)
   sections.push(generateTables());
 
-  // BLOCKS section (empty but required)
-  sections.push(generateBlocks());
+  // BLOCKS section (door and window symbols)
+  sections.push(generateBlocksSection());
 
   // ENTITIES section (the actual geometry)
   sections.push(generateEntities(geometry));
@@ -225,6 +232,23 @@ txt
 ENDTAB
 `;
 
+  // APPID table (for XDATA)
+  out += `0
+TABLE
+2
+APPID
+70
+1
+0
+APPID
+2
+ARCHDRAFT
+70
+0
+0
+ENDTAB
+`;
+
   out += `0
 ENDSEC
 `;
@@ -234,13 +258,8 @@ ENDSEC
 // ── BLOCKS ──
 
 function generateBlocks(): string {
-  return `0
-SECTION
-2
-BLOCKS
-0
-ENDSEC
-`;
+  // Now handled by dxf-blocks.ts
+  return "";
 }
 
 // ── ENTITIES ──
@@ -252,37 +271,55 @@ SECTION
 ENTITIES
 `;
 
-  const spacingX = geometry.footprint.width + 3000; // 3000mm spacing between levels
-  const tx = (x: number, level: number) => x + (level - 1) * spacingX;
+  // Multi-level handling: Use Z-axis elevation instead of horizontal spacing
+  const getZ = (level: number) => (level - 1) * 3000; // 3000mm per level
 
-  // 1. Draw each room boundary
+  // 1. Draw room fills with hatch patterns
   for (const room of geometry.rooms) {
-    const rx = tx(room.rect.x, room.level);
-    out += drawRoomBoundary({ ...room.rect, x: rx }, "INTERIOR_WALLS");
+    const z = getZ(room.level);
+    const boundaryPoints: [number, number][] = [
+      [room.rect.x, room.rect.y],
+      [room.rect.x + room.rect.width, room.rect.y],
+      [room.rect.x + room.rect.width, room.rect.y + room.rect.height],
+      [room.rect.x, room.rect.y + room.rect.height],
+      [room.rect.x, room.rect.y], // Close the loop
+    ];
+
+    // Add subtle hatch fill
+    out += generateHatch(boundaryPoints, "SOLID", "ROOM_FILLS", 251);
   }
 
-  // 2. Draw walls as thick polylines
+  // 2. Draw each room boundary with XDATA metadata
+  for (const room of geometry.rooms) {
+    const z = getZ(room.level);
+    out += drawRoomBoundaryWithMetadata(room, "INTERIOR_WALLS", z);
+  }
+
+  // 3. Draw walls as thick polylines
   for (const wall of geometry.walls) {
-    const w = { ...wall, x1: tx(wall.x1, wall.level), x2: tx(wall.x2, wall.level) };
-    if (w.layer === "INTERIOR_WALLS") {
-      out += drawWallLine(w);
-    } else if (w.layer === "EXTERIOR_WALLS") {
-      // Draw exterior walls identically, but on the exterior layer
-      out += drawWallLine(w);
-    }
+    const z = getZ(wall.level);
+    out += drawWallLineWithZ(wall, z);
   }
 
-  // 3. Draw openings (doors and windows)
+  // 4. Draw openings using block inserts
   for (const opening of geometry.openings) {
-    const o = { ...opening, x: tx(opening.x, opening.level) };
-    out += drawOpening(o);
+    const z = getZ(opening.level);
+    out += drawOpeningWithBlocks(opening, z);
   }
 
-  // 4. Draw room labels
+  // 5. Draw room labels
   for (const room of geometry.rooms) {
-    const r = { ...room.rect, x: tx(room.rect.x, room.level) };
-    out += drawLabel(room.name, r);
-    out += drawAreaLabel(room.actual_area_sqft, r);
+    const z = getZ(room.level);
+    out += drawLabel(room.name, room.rect, z);
+    out += drawAreaLabel(room.actual_area_sqft, room.rect, z);
+  }
+
+  // 6. Draw dimensions for major rooms
+  for (const room of geometry.rooms) {
+    const z = getZ(room.level);
+    if (room.actual_area_sqft > 100) { // Only dimension larger rooms
+      out += drawRoomDimensions(room.rect, z);
+    }
   }
 
   out += `0
@@ -292,33 +329,148 @@ ENDSEC
 }
 
 /**
- * Draw exterior wall as two concentric closed LWPOLYLINEs (outer + inner boundary)
+ * Draw room boundary with XDATA metadata
  */
-function drawWallPolyline(rect: Rect, thickness: number, layer: string): string {
-  let out = "";
-
-  // Outer boundary
-  out += lwpolyline(
+function drawRoomBoundaryWithMetadata(room: any, layer: string, z: number): string {
+  let out = lwpolylineWithZ(
     [
-      [rect.x, rect.y],
-      [rect.x + rect.width, rect.y],
-      [rect.x + rect.width, rect.y + rect.height],
-      [rect.x, rect.y + rect.height],
+      [room.rect.x, room.rect.y],
+      [room.rect.x + room.rect.width, room.rect.y],
+      [room.rect.x + room.rect.width, room.rect.y + room.rect.height],
+      [room.rect.x, room.rect.y + room.rect.height],
     ],
     layer,
-    true
+    true,
+    z
   );
 
-  // Inner boundary (offset inward by wall thickness)
-  out += lwpolyline(
-    [
-      [rect.x + thickness, rect.y + thickness],
-      [rect.x + rect.width - thickness, rect.y + thickness],
-      [rect.x + rect.width - thickness, rect.y + rect.height - thickness],
-      [rect.x + thickness, rect.y + rect.height - thickness],
-    ],
-    layer,
-    true
+  // Attach XDATA
+  out += generateXData(room.id, room.name, room.actual_area_sqft, room.level);
+
+  return out;
+}
+
+/**
+ * Draw wall line with Z-axis elevation
+ */
+function drawWallLineWithZ(wall: WallSegment, z: number): string {
+  const halfT = wall.thickness / 2;
+  const isVertical = Math.abs(wall.x1 - wall.x2) < 1;
+
+  let out = "";
+
+  if (isVertical) {
+    // Vertical wall — offset in X
+    out += lwpolylineWithZ(
+      [
+        [wall.x1 - halfT, wall.y1],
+        [wall.x1 - halfT, wall.y2],
+      ],
+      wall.layer,
+      false,
+      z
+    );
+    out += lwpolylineWithZ(
+      [
+        [wall.x1 + halfT, wall.y1],
+        [wall.x1 + halfT, wall.y2],
+      ],
+      wall.layer,
+      false,
+      z
+    );
+  } else {
+    // Horizontal wall — offset in Y
+    out += lwpolylineWithZ(
+      [
+        [wall.x1, wall.y1 - halfT],
+        [wall.x2, wall.y1 - halfT],
+      ],
+      wall.layer,
+      false,
+      z
+    );
+    out += lwpolylineWithZ(
+      [
+        [wall.x1, wall.y1 + halfT],
+        [wall.x2, wall.y1 + halfT],
+      ],
+      wall.layer,
+      false,
+      z
+    );
+  }
+
+  return out;
+}
+
+/**
+ * Draw opening using block inserts
+ */
+function drawOpeningWithBlocks(opening: PlacedOpening, z: number): string {
+  let out = "";
+  const isVertical = opening.angle === 90;
+  const rotation = isVertical ? 90 : 0;
+
+  if (opening.type === "door" || opening.type === "sliding_door" || opening.type === "double_door") {
+    // Use DOOR_SWING block
+    out += insertBlock("DOOR_SWING", opening.x, opening.y, rotation, "DOORS");
+  } else if (opening.type === "window") {
+    // Use WINDOW_SINGLE or WINDOW_DOUBLE block
+    const blockName = opening.width > 1500 ? "WINDOW_DOUBLE" : "WINDOW_SINGLE";
+    out += insertBlock(blockName, opening.x, opening.y, rotation, "WINDOWS");
+  } else {
+    // Fallback to line drawing for other types
+    if (isVertical) {
+      out += lwpolylineWithZ(
+        [
+          [opening.x, opening.y],
+          [opening.x, opening.y + opening.width],
+        ],
+        opening.layer,
+        false,
+        z
+      );
+    } else {
+      out += lwpolylineWithZ(
+        [
+          [opening.x, opening.y],
+          [opening.x + opening.width, opening.y],
+        ],
+        opening.layer,
+        false,
+        z
+      );
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Draw dimensions for a room
+ */
+function drawRoomDimensions(rect: Rect, z: number): string {
+  let out = "";
+
+  // Horizontal dimension (width)
+  out += generateDimension(
+    rect.x,
+    rect.y,
+    rect.x + rect.width,
+    rect.y,
+    -500, // Offset above
+    "DIMENSIONS"
+  );
+
+  // Vertical dimension (height)
+  out += generateDimension(
+    rect.x,
+    rect.y,
+    rect.x,
+    rect.y + rect.height,
+    -500, // Offset to left
+    "DIMENSIONS"
   );
 
   return out;
@@ -341,171 +493,9 @@ function drawRoomBoundary(rect: Rect, layer: string): string {
 }
 
 /**
- * Draw an interior wall as a thick line (two parallel lines)
- */
-function drawWallLine(wall: WallSegment): string {
-  const halfT = wall.thickness / 2;
-  const isVertical = Math.abs(wall.x1 - wall.x2) < 1;
-
-  let out = "";
-
-  if (isVertical) {
-    // Vertical wall — offset in X
-    out += lwpolyline(
-      [
-        [wall.x1 - halfT, wall.y1],
-        [wall.x1 - halfT, wall.y2],
-      ],
-      wall.layer,
-      false
-    );
-    out += lwpolyline(
-      [
-        [wall.x1 + halfT, wall.y1],
-        [wall.x1 + halfT, wall.y2],
-      ],
-      wall.layer,
-      false
-    );
-  } else {
-    // Horizontal wall — offset in Y
-    out += lwpolyline(
-      [
-        [wall.x1, wall.y1 - halfT],
-        [wall.x2, wall.y1 - halfT],
-      ],
-      wall.layer,
-      false
-    );
-    out += lwpolyline(
-      [
-        [wall.x1, wall.y1 + halfT],
-        [wall.x2, wall.y1 + halfT],
-      ],
-      wall.layer,
-      false
-    );
-  }
-
-  return out;
-}
-
-/**
- * Draw door or window opening as a line on its respective layer
- */
-function drawOpening(opening: PlacedOpening): string {
-  let out = "";
-  const isVertical = opening.angle === 90;
-
-  if (isVertical) {
-    out += lwpolyline(
-      [
-        [opening.x, opening.y],
-        [opening.x, opening.y + opening.width],
-      ],
-      opening.layer,
-      false
-    );
-
-    // For doors, draw the swing arc indicator
-    if (opening.type === "door") {
-      out += drawDoorSwing(opening.x, opening.y, opening.width, true);
-    }
-  } else {
-    out += lwpolyline(
-      [
-        [opening.x, opening.y],
-        [opening.x + opening.width, opening.y],
-      ],
-      opening.layer,
-      false
-    );
-
-    if (opening.type === "door") {
-      out += drawDoorSwing(opening.x, opening.y, opening.width, false);
-    }
-  }
-
-  // For windows, draw the double-line symbol
-  if (opening.type === "window") {
-    out += drawWindowSymbol(opening);
-  }
-
-  return out;
-}
-
-/**
- * Draw a simple door swing arc using line segments
- */
-function drawDoorSwing(x: number, y: number, width: number, vertical: boolean): string {
-  const segments = 8;
-  const points: [number, number][] = [];
-  const radius = width;
-
-  for (let i = 0; i <= segments; i++) {
-    const angle = (Math.PI / 2) * (i / segments);
-    if (vertical) {
-      points.push([
-        x + radius * Math.cos(angle),
-        y + radius * Math.sin(angle),
-      ]);
-    } else {
-      points.push([
-        x + radius * Math.sin(angle),
-        y + radius * Math.cos(angle),
-      ]);
-    }
-  }
-
-  return lwpolyline(points, "DOORS", false);
-}
-
-/**
- * Draw window symbol (double line)
- */
-function drawWindowSymbol(opening: PlacedOpening): string {
-  const offset = 40; // mm offset for double line
-  const isVertical = opening.angle === 90;
-
-  if (isVertical) {
-    return lwpolyline(
-      [
-        [opening.x + offset, opening.y],
-        [opening.x + offset, opening.y + opening.width],
-      ],
-      "WINDOWS",
-      false
-    ) + lwpolyline(
-      [
-        [opening.x - offset, opening.y],
-        [opening.x - offset, opening.y + opening.width],
-      ],
-      "WINDOWS",
-      false
-    );
-  } else {
-    return lwpolyline(
-      [
-        [opening.x, opening.y + offset],
-        [opening.x + opening.width, opening.y + offset],
-      ],
-      "WINDOWS",
-      false
-    ) + lwpolyline(
-      [
-        [opening.x, opening.y - offset],
-        [opening.x + opening.width, opening.y - offset],
-      ],
-      "WINDOWS",
-      false
-    );
-  }
-}
-
-/**
  * Draw room name label
  */
-function drawLabel(text: string, rect: Rect): string {
+function drawLabel(text: string, rect: Rect, z: number = 0): string {
   const centerX = rect.x + rect.width / 2;
   const centerY = rect.y + rect.height / 2 + 100; // slightly above center
 
@@ -518,7 +508,7 @@ ${centerX.toFixed(1)}
 20
 ${centerY.toFixed(1)}
 30
-0.0
+${z.toFixed(1)}
 40
 200.0
 1
@@ -530,14 +520,14 @@ ${centerX.toFixed(1)}
 21
 ${centerY.toFixed(1)}
 31
-0.0
+${z.toFixed(1)}
 `;
 }
 
 /**
  * Draw area label below room name
  */
-function drawAreaLabel(areaSqft: number, rect: Rect): string {
+function drawAreaLabel(areaSqft: number, rect: Rect, z: number = 0): string {
   const centerX = rect.x + rect.width / 2;
   const centerY = rect.y + rect.height / 2 - 200; // below center
 
@@ -550,7 +540,7 @@ ${centerX.toFixed(1)}
 20
 ${centerY.toFixed(1)}
 30
-0.0
+${z.toFixed(1)}
 40
 150.0
 1
@@ -562,21 +552,24 @@ ${centerX.toFixed(1)}
 21
 ${centerY.toFixed(1)}
 31
-0.0
+${z.toFixed(1)}
 `;
 }
 
-// ── DXF Primitive: LWPOLYLINE ──
+// ── DXF Primitive: LWPOLYLINE with Z-axis support ──
 
-function lwpolyline(
+function lwpolylineWithZ(
   points: [number, number][],
   layer: string,
-  closed: boolean
+  closed: boolean,
+  z: number = 0
 ): string {
   let out = `0
 LWPOLYLINE
 8
 ${layer}
+38
+${z.toFixed(1)}
 90
 ${points.length}
 70
@@ -592,4 +585,14 @@ ${y.toFixed(1)}
   }
 
   return out;
+}
+
+// ── DXF Primitive: LWPOLYLINE ──
+
+function lwpolyline(
+  points: [number, number][],
+  layer: string,
+  closed: boolean
+): string {
+  return lwpolylineWithZ(points, layer, closed, 0);
 }

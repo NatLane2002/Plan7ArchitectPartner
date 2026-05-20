@@ -1,5 +1,8 @@
 // @ts-nocheck
 /**
+ * LEGACY: Deterministic parser retained for fallback validation.
+ * Main production pipeline runs via LLM Zod engine.
+ *
  * LLM Floor Plan Parser
  *
  * Takes hybrid user input (natural language + form fields) and produces
