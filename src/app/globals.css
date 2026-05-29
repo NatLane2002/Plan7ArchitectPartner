@@ -384,7 +384,21 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 16px;
+}
+
+/* SVG wrapper — fills the available space inside canvas-preview */
+.canvas-svg-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.canvas-svg-wrapper > svg {
+  width: 100%;
+  height: 100%;
 }
 
 .canvas-overlay-label {
@@ -787,3 +801,300 @@ body::before {
     opacity: 0.2;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FLOOR PLAN LEGEND — HTML bar below the SVG canvas
+   Sits outside the SVG coordinate space so it can NEVER overlap the diagram.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.canvas-legend {
+  flex-shrink: 0;
+  height: 40px;
+  border-top: 1px solid #18181b;
+  background: rgba(10, 10, 10, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 0 20px;
+  z-index: 10;
+  position: relative;
+}
+
+.canvas-legend-fullscreen {
+  border-radius: 0 0 12px 12px;
+}
+
+.canvas-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.canvas-legend-label {
+  font-size: 10px;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  opacity: 0.9;
+}
+
+.canvas-legend-divider {
+  width: 1px;
+  height: 16px;
+  background: #27272a;
+  flex-shrink: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   INPUT MODE TOGGLE — Text vs. From Image
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.input-mode-toggle {
+  display: flex;
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.mode-toggle-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #71717a;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.mode-toggle-btn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
+.mode-toggle-btn:hover:not(.mode-toggle-btn-active) {
+  color: #a1a1aa;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mode-toggle-btn-active {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   IMAGE MODE INFO CARD — shown in place of the textarea in image mode
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.image-mode-info {
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.image-mode-info-icon {
+  color: #818cf8;
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
+
+.image-mode-info-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a1a1aa;
+  letter-spacing: 0.02em;
+}
+
+.image-mode-info-body {
+  font-size: 11px;
+  color: #71717a;
+  line-height: 1.6;
+}
+
+.image-mode-info-body strong {
+  color: #a1a1aa;
+  font-weight: 600;
+}
+
+.image-mode-info-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding-top: 8px;
+  border-top: 1px solid #18181b;
+  margin-top: 2px;
+}
+
+.image-mode-info-list li {
+  font-size: 10px;
+  color: #52525b;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-mode-info-list li::before {
+  content: '—';
+  color: #3f3f46;
+  flex-shrink: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   STYLE QUICK-PICK CHIPS — Step 1 text mode
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.style-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.style-chip {
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #71717a;
+  background: transparent;
+  border: 1px solid #27272a;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  outline: none;
+  white-space: nowrap;
+}
+
+.style-chip:hover {
+  color: #818cf8;
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.style-chip:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COPY PROMPT BUTTON VARIANTS
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.workflow-button-copy {
+  background: transparent;
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+.workflow-button-copy:hover {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.6);
+  transform: translateY(-1px);
+}
+
+.workflow-button-copied {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  cursor: default;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   JSON INPUT WRAPPER — char count + meta bar
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.json-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.json-meta-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: #09090b;
+  border: 1px solid #27272a;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  margin-top: -1px;
+}
+
+/* Make the textarea bottom corners square when meta bar is present */
+.json-input-wrapper .workflow-textarea-code {
+  border-radius: 8px 8px 0 0;
+}
+
+.json-meta-chars {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #52525b;
+  flex-shrink: 0;
+}
+
+.json-meta-strip {
+  font-size: 9px;
+  color: #f59e0b;
+  font-weight: 500;
+  flex: 1;
+  text-align: center;
+}
+
+.json-meta-hint {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #3f3f46;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ROOM ACCURACY BAR — right sidebar Space Breakdown
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.room-metrics-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.room-accuracy-bar-track {
+  width: 100%;
+  height: 3px;
+  background: #18181b;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.room-accuracy-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.room-accuracy-bar-good  { background: #10b981; }
+.room-accuracy-bar-warn  { background: #f59e0b; }
+.room-accuracy-bar-bad   { background: #ef4444; }

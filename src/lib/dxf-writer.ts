@@ -1,598 +1,431 @@
 /**
  * DXF Writer for ArchDraft Universal
  *
- * Generates a properly layered DXF file with:
- * - EXTERIOR_WALLS layer (color 7 / white, 250mm thick polylines)
- * - INTERIOR_WALLS layer (color 8 / grey, 120mm thick polylines)
- * - DOORS layer (color 1 / red)
- * - WINDOWS layer (color 5 / blue)
- * - LABELS layer (color 3 / green)
- * - DIMENSIONS layer (color 6 / magenta)
- * - ROOM_FILLS layer (color 251 / light grey)
+ * Produces a fully spec-compliant AC1015 (AutoCAD 2000) DXF file.
  *
- * All geometry uses LWPOLYLINE for maximum CAD compatibility.
- * Professional features: BLOCK definitions, XDATA metadata, HATCH patterns, DIMENSION entities.
- * Units: millimeters.
+ * KEY FIX: Every entity and table record now includes the required AC1015
+ * subclass markers (group code 100). Without these, strict parsers such as
+ * Plan7Architect abort the ENTITIES section and display a completely blank
+ * drawing on import.
+ *
+ * PLAN7ARCHITECT WORKFLOW:
+ * The DXF imports as a 2D reference drawing. The user traces over it with
+ * Plan7Architect's wall/door/window tools to build the native 3D model.
+ * The drawing is optimised for this workflow:
+ *   - Closed LWPOLYLINE wall outlines (full thickness) for snap targets
+ *   - Dashed centerlines on A-WALL-CNTR for wall placement reference
+ *   - LINE openings on typed layers (A-DOOR, A-GLAZ, A-DOOR-GAR, etc.)
+ *   - Room labels and dimension lines for spatial reference
+ *   - All geometry at Z=0; multi-story floors offset horizontally
+ *
+ * Units: millimeters ($INSUNITS = 4).
  */
 
-import type { FloorPlanGeometry, Rect, WallSegment, PlacedOpening } from "./bsp-engine";
-import { generateBlocksSection, insertBlock, generateXData, generateHatch, generateDimension } from "./dxf-blocks";
+import type { FloorPlanGeometry, Rect, WallSegment, PlacedOpening, PlacedRoom } from "./bsp-engine";
+import { dxfLine, dxfLwpolyline, dxfText, generateHatch, generateDimension } from "./dxf-blocks";
 
-// ── DXF Color Constants (AutoCAD Color Index) ──
-const COLORS = {
-  EXTERIOR_WALLS: 7,  // White
-  INTERIOR_WALLS: 8,  // Grey
-  DOORS: 1,           // Red
-  WINDOWS: 5,         // Blue
-  LABELS: 3,          // Green
-  DIMENSIONS: 6,      // Magenta
-  ROOM_FILL: 251,     // Light grey
+// ── AutoCAD Color Index (ACI) ──────────────────────────────────────────────
+const ACI = {
+  WHITE:   7,
+  GREY:    8,
+  RED:     1,
+  YELLOW:  2,
+  GREEN:   3,
+  CYAN:    4,
+  BLUE:    5,
+  MAGENTA: 6,
+  LTGREY:  251,
 } as const;
 
-// ── Layer definitions ──
-interface LayerDef {
-  name: string;
-  color: number;
-  lineType: string;
-}
+// ── Layer table ────────────────────────────────────────────────────────────
+interface LayerDef { name: string; color: number; lineType: string; }
 
 const LAYERS: LayerDef[] = [
-  { name: "EXTERIOR_WALLS", color: COLORS.EXTERIOR_WALLS, lineType: "CONTINUOUS" },
-  { name: "INTERIOR_WALLS", color: COLORS.INTERIOR_WALLS, lineType: "CONTINUOUS" },
-  { name: "DOORS", color: COLORS.DOORS, lineType: "CONTINUOUS" },
-  { name: "WINDOWS", color: COLORS.WINDOWS, lineType: "DASHED" },
-  { name: "LABELS", color: COLORS.LABELS, lineType: "CONTINUOUS" },
-  { name: "DIMENSIONS", color: COLORS.DIMENSIONS, lineType: "CONTINUOUS" },
-  { name: "ROOM_FILLS", color: COLORS.ROOM_FILL, lineType: "CONTINUOUS" },
+  { name: "A-WALL-EXTR", color: ACI.WHITE,   lineType: "CONTINUOUS" },
+  { name: "A-WALL-INTR", color: ACI.GREY,    lineType: "CONTINUOUS" },
+  { name: "A-WALL-CNTR", color: ACI.CYAN,    lineType: "DASHED"     },
+  { name: "A-DOOR",      color: ACI.RED,     lineType: "CONTINUOUS" },
+  { name: "A-DOOR-DBL",  color: ACI.MAGENTA, lineType: "CONTINUOUS" },
+  { name: "A-DOOR-GAR",  color: ACI.YELLOW,  lineType: "CONTINUOUS" },
+  { name: "A-GLAZ",      color: ACI.BLUE,    lineType: "DASHED"     },
+  { name: "A-ROOM",      color: ACI.LTGREY,  lineType: "CONTINUOUS" },
+  { name: "A-TEXT",      color: ACI.GREEN,   lineType: "CONTINUOUS" },
+  { name: "A-DIMS",      color: ACI.CYAN,    lineType: "CONTINUOUS" },
 ];
 
-/**
- * Generate a complete DXF string from floor plan geometry
- */
-export function generateDXF(geometry: FloorPlanGeometry): string {
-  const sections: string[] = [];
-
-  // HEADER section
-  sections.push(generateHeader(geometry));
-
-  // TABLES section (layers, line types, styles)
-  sections.push(generateTables());
-
-  // BLOCKS section (door and window symbols)
-  sections.push(generateBlocksSection());
-
-  // ENTITIES section (the actual geometry)
-  sections.push(generateEntities(geometry));
-
-  // End of file
-  sections.push("0\nEOF\n");
-
-  return sections.join("");
+function openingLayer(type: string): string {
+  if (type === "window")      return "A-GLAZ";
+  if (type === "garage_door") return "A-DOOR-GAR";
+  if (type === "double_door") return "A-DOOR-DBL";
+  return "A-DOOR";
 }
 
-// ── HEADER ──
-
-function generateHeader(geometry: FloorPlanGeometry): string {
-  const { footprint } = geometry;
-  return `0
-SECTION
-2
-HEADER
-9
-$ACADVER
-1
-AC1015
-9
-$INSUNITS
-70
-4
-9
-$MEASUREMENT
-70
-1
-9
-$LUNITS
-70
-2
-9
-$LUPREC
-70
-0
-9
-$EXTMIN
-10
-0.0
-20
-0.0
-30
-0.0
-9
-$EXTMAX
-10
-${footprint.width.toFixed(1)}
-20
-${footprint.height.toFixed(1)}
-30
-0.0
-0
-ENDSEC
-`;
+function wallLayer(seg: WallSegment): string {
+  return seg.layer === "EXTERIOR_WALLS" ? "A-WALL-EXTR" : "A-WALL-INTR";
 }
 
-// ── TABLES (Layers, LineTypes, Styles) ──
+// ═══════════════════════════════════════════════════════════════════════════
+// PUBLIC API
+// ═══════════════════════════════════════════════════════════════════════════
 
-function generateTables(): string {
-  let out = `0
-SECTION
-2
-TABLES
-`;
-
-  // Line types table
-  out += `0
-TABLE
-2
-LTYPE
-70
-2
-`;
-  // CONTINUOUS
-  out += `0
-LTYPE
-2
-CONTINUOUS
-70
-0
-3
-Solid line
-72
-65
-73
-0
-40
-0.0
-`;
-  // DASHED
-  out += `0
-LTYPE
-2
-DASHED
-70
-0
-3
-Dashed line
-72
-65
-73
-2
-40
-12.0
-49
-8.0
-49
--4.0
-`;
-  out += `0
-ENDTAB
-`;
-
-  // Layers table
-  out += `0
-TABLE
-2
-LAYER
-70
-${LAYERS.length}
-`;
-  for (const layer of LAYERS) {
-    out += `0
-LAYER
-2
-${layer.name}
-70
-0
-62
-${layer.color}
-6
-${layer.lineType}
-`;
+export function generateDXFPerLevel(geometry: FloorPlanGeometry): Map<number, string> {
+  const levels = [...new Set(geometry.rooms.map(r => r.level))].sort();
+  const result = new Map<number, string>();
+  for (const level of levels) {
+    result.set(level, buildDXF({
+      ...geometry,
+      rooms:    geometry.rooms.filter(r => r.level === level),
+      walls:    geometry.walls.filter(w => w.level === level),
+      openings: geometry.openings.filter(o => o.level === level),
+    }));
   }
-  out += `0
-ENDTAB
-`;
+  return result;
+}
 
-  // Text style table
-  out += `0
-TABLE
-2
-STYLE
-70
-1
-0
-STYLE
-2
-STANDARD
-70
-0
-40
-0.0
-41
-1.0
-50
-0.0
-71
-0
-42
-250.0
-3
-txt
-4
+export function generateDXF(geometry: FloorPlanGeometry): string {
+  const levels = [...new Set(geometry.rooms.map(r => r.level))].sort();
+  if (levels.length === 1) return buildDXF(geometry);
 
-0
-ENDTAB
-`;
+  const gap     = 5000;
+  const offsetX = geometry.footprint.width + gap;
 
-  // APPID table (for XDATA)
-  out += `0
-TABLE
-2
-APPID
-70
-1
-0
-APPID
-2
-ARCHDRAFT
-70
-0
-0
-ENDTAB
-`;
+  const flatRooms: PlacedRoom[] = geometry.rooms.map(r => ({
+    ...r,
+    rect: { ...r.rect, x: r.rect.x + (r.level - 1) * offsetX },
+    level: 1,
+  }));
+  const flatWalls: WallSegment[] = geometry.walls.map(w => ({
+    ...w,
+    x1: w.x1 + (w.level - 1) * offsetX,
+    x2: w.x2 + (w.level - 1) * offsetX,
+    level: 1,
+  }));
+  const flatOpenings: PlacedOpening[] = geometry.openings.map(o => ({
+    ...o,
+    x: o.x + (o.level - 1) * offsetX,
+    level: 1,
+  }));
 
-  out += `0
-ENDSEC
-`;
+  const levelTitles = levels.map(level => ({
+    label: `LEVEL ${level}`,
+    x: (level - 1) * offsetX + geometry.footprint.width / 2,
+    y: -1500,
+  }));
+
+  return buildDXF(
+    {
+      ...geometry,
+      footprint: { ...geometry.footprint, width: geometry.footprint.width * levels.length + gap * (levels.length - 1) },
+      rooms: flatRooms,
+      walls: flatWalls,
+      openings: flatOpenings,
+    },
+    levelTitles
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INTERNAL BUILDER
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildDXF(
+  geometry: FloorPlanGeometry,
+  levelTitles?: Array<{ label: string; x: number; y: number }>
+): string {
+  return [
+    buildHeader(geometry),
+    buildTables(),
+    buildBlocks(),
+    buildEntities(geometry, levelTitles),
+    "0\nEOF\n",
+  ].join("");
+}
+
+// ── HEADER ─────────────────────────────────────────────────────────────────
+
+function buildHeader(geometry: FloorPlanGeometry): string {
+  const { footprint } = geometry;
+  const margin = 2000;
+  const xMin = (-margin).toFixed(2);
+  const yMin = (-margin).toFixed(2);
+  const xMax = (footprint.width  + margin).toFixed(2);
+  const yMax = (footprint.height + margin).toFixed(2);
+
+  return (
+    `0\nSECTION\n2\nHEADER\n` +
+    `9\n$ACADVER\n1\nAC1015\n` +
+    `9\n$DWGCODEPAGE\n3\nANSI_1252\n` +
+    `9\n$INSUNITS\n70\n4\n` +          // 4 = millimeters
+    `9\n$MEASUREMENT\n70\n1\n` +        // 1 = metric
+    `9\n$LUNITS\n70\n2\n` +             // 2 = decimal
+    `9\n$LUPREC\n70\n0\n` +
+    `9\n$AUNITS\n70\n0\n` +
+    `9\n$AUPREC\n70\n0\n` +
+    `9\n$LTSCALE\n40\n1000.0\n` +
+    `9\n$DIMSCALE\n40\n1.0\n` +
+    `9\n$DIMASZ\n40\n250.0\n` +
+    `9\n$DIMTXT\n40\n200.0\n` +
+    `9\n$EXTMIN\n10\n${xMin}\n20\n${yMin}\n30\n0.0\n` +
+    `9\n$EXTMAX\n10\n${xMax}\n20\n${yMax}\n30\n0.0\n` +
+    `9\n$LIMMIN\n10\n${xMin}\n20\n${yMin}\n` +
+    `9\n$LIMMAX\n10\n${xMax}\n20\n${yMax}\n` +
+    `9\n$CLAYER\n8\n0\n` +
+    `9\n$CELTYPE\n6\nBYLAYER\n` +
+    `9\n$CECOLOR\n62\n256\n` +          // 256 = BYLAYER
+    `0\nENDSEC\n`
+  );
+}
+
+// ── TABLES ─────────────────────────────────────────────────────────────────
+// Every table entry requires:
+//   100  AcDbSymbolTableRecord
+//   100  AcDb<SpecificRecord>
+
+function buildTables(): string {
+  let out = `0\nSECTION\n2\nTABLES\n`;
+
+  // ── VPORT ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nVPORT\n70\n1\n`;
+  out +=
+    `0\nVPORT\n` +
+    `100\nAcDbSymbolTableRecord\n` +
+    `100\nAcDbViewportTableRecord\n` +
+    `2\n*ACTIVE\n70\n0\n` +
+    `10\n0.0\n20\n0.0\n` +   // lower-left corner
+    `11\n1.0\n21\n1.0\n` +   // upper-right corner
+    `12\n0.0\n22\n0.0\n` +   // view center
+    `13\n0.0\n23\n0.0\n` +   // snap base
+    `14\n10.0\n24\n10.0\n` + // snap spacing
+    `15\n10.0\n25\n10.0\n` + // grid spacing
+    `16\n0.0\n26\n0.0\n36\n1.0\n` + // view direction
+    `17\n0.0\n27\n0.0\n37\n0.0\n` + // view target
+    `40\n1.0\n` +   // view height
+    `41\n1.0\n` +   // viewport aspect ratio
+    `42\n50.0\n` +  // lens length
+    `43\n0.0\n44\n0.0\n` +
+    `50\n0.0\n51\n0.0\n` +
+    `71\n0\n72\n1000\n73\n1\n74\n3\n75\n0\n76\n0\n77\n0\n78\n0\n`;
+  out += `0\nENDTAB\n`;
+
+  // ── LTYPE ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nLTYPE\n70\n3\n`;
+  // BYLAYER
+  out +=
+    `0\nLTYPE\n100\nAcDbSymbolTableRecord\n100\nAcDbLinetypeTableRecord\n` +
+    `2\nBYLAYER\n70\n0\n3\n\n72\n65\n73\n0\n40\n0.0\n`;
+  // CONTINUOUS
+  out +=
+    `0\nLTYPE\n100\nAcDbSymbolTableRecord\n100\nAcDbLinetypeTableRecord\n` +
+    `2\nCONTINUOUS\n70\n0\n3\nSolid line\n72\n65\n73\n0\n40\n0.0\n`;
+  // DASHED  (800mm dash, 400mm gap — readable at mm scale)
+  out +=
+    `0\nLTYPE\n100\nAcDbSymbolTableRecord\n100\nAcDbLinetypeTableRecord\n` +
+    `2\nDASHED\n70\n0\n3\nDashed __ __ __\n72\n65\n73\n2\n40\n1200.0\n` +
+    `49\n800.0\n74\n0\n49\n-400.0\n74\n0\n`;
+  out += `0\nENDTAB\n`;
+
+  // ── LAYER ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nLAYER\n70\n${LAYERS.length + 1}\n`;
+  // Layer 0 (required)
+  out +=
+    `0\nLAYER\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n` +
+    `2\n0\n70\n0\n62\n7\n6\nCONTINUOUS\n`;
+  for (const layer of LAYERS) {
+    out +=
+      `0\nLAYER\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n` +
+      `2\n${layer.name}\n70\n0\n62\n${layer.color}\n6\n${layer.lineType}\n`;
+  }
+  out += `0\nENDTAB\n`;
+
+  // ── STYLE ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nSTYLE\n70\n1\n`;
+  out +=
+    `0\nSTYLE\n100\nAcDbSymbolTableRecord\n100\nAcDbTextStyleTableRecord\n` +
+    `2\nSTANDARD\n70\n0\n40\n0.0\n41\n1.0\n50\n0.0\n71\n0\n42\n250.0\n3\ntxt\n4\n\n`;
+  out += `0\nENDTAB\n`;
+
+  // ── VIEW ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nVIEW\n70\n0\n0\nENDTAB\n`;
+
+  // ── UCS ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nUCS\n70\n0\n0\nENDTAB\n`;
+
+  // ── APPID ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nAPPID\n70\n1\n`;
+  out +=
+    `0\nAPPID\n100\nAcDbSymbolTableRecord\n100\nAcDbRegAppTableRecord\n` +
+    `2\nACCAD\n70\n0\n`;
+  out += `0\nENDTAB\n`;
+
+  // ── DIMSTYLE ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nDIMSTYLE\n70\n1\n`;
+  out +=
+    `0\nDIMSTYLE\n100\nAcDbSymbolTableRecord\n100\nAcDbDimStyleTableRecord\n` +
+    `2\nSTANDARD\n70\n0\n` +
+    `3\n\n4\n\n5\n\n6\n\n7\n\n` +
+    `40\n1.0\n41\n2.5\n42\n0.625\n43\n3.75\n44\n1.25\n` +
+    `140\n2.5\n141\n0.09\n143\n25.4\n144\n1.0\n146\n1.0\n147\n0.625\n` +
+    `71\n0\n72\n0\n73\n0\n74\n0\n75\n0\n76\n0\n77\n0\n78\n0\n` +
+    `170\n0\n171\n2\n172\n0\n173\n0\n174\n0\n175\n0\n176\n0\n177\n0\n178\n0\n`;
+  out += `0\nENDTAB\n`;
+
+  // ── BLOCK_RECORD ──
+  out += `0\nTABLE\n100\nAcDbSymbolTable\n2\nBLOCK_RECORD\n70\n2\n`;
+  out +=
+    `0\nBLOCK_RECORD\n100\nAcDbSymbolTableRecord\n100\nAcDbBlockTableRecord\n` +
+    `2\n*MODEL_SPACE\n`;
+  out +=
+    `0\nBLOCK_RECORD\n100\nAcDbSymbolTableRecord\n100\nAcDbBlockTableRecord\n` +
+    `2\n*PAPER_SPACE\n`;
+  out += `0\nENDTAB\n`;
+
+  out += `0\nENDSEC\n`;
   return out;
 }
 
-// ── BLOCKS ──
+// ── BLOCKS ─────────────────────────────────────────────────────────────────
+// AC1015 requires *MODEL_SPACE and *PAPER_SPACE block definitions.
+// BLOCK/ENDBLK also need subclass markers.
 
-function generateBlocks(): string {
-  // Now handled by dxf-blocks.ts
-  return "";
+function buildBlocks(): string {
+  let out = `0\nSECTION\n2\nBLOCKS\n`;
+
+  // *MODEL_SPACE
+  out +=
+    `0\nBLOCK\n` +
+    `100\nAcDbEntity\n8\n0\n` +
+    `100\nAcDbBlockBegin\n` +
+    `2\n*MODEL_SPACE\n70\n0\n` +
+    `10\n0.0\n20\n0.0\n30\n0.0\n` +
+    `3\n*MODEL_SPACE\n1\n\n`;
+  out += `0\nENDBLK\n100\nAcDbEntity\n8\n0\n100\nAcDbBlockEnd\n`;
+
+  // *PAPER_SPACE
+  out +=
+    `0\nBLOCK\n` +
+    `100\nAcDbEntity\n8\n0\n` +
+    `100\nAcDbBlockBegin\n` +
+    `2\n*PAPER_SPACE\n70\n0\n` +
+    `10\n0.0\n20\n0.0\n30\n0.0\n` +
+    `3\n*PAPER_SPACE\n1\n\n`;
+  out += `0\nENDBLK\n100\nAcDbEntity\n8\n0\n100\nAcDbBlockEnd\n`;
+
+  out += `0\nENDSEC\n`;
+  return out;
 }
 
-// ── ENTITIES ──
+// ── ENTITIES ───────────────────────────────────────────────────────────────
 
-function generateEntities(geometry: FloorPlanGeometry): string {
-  let out = `0
-SECTION
-2
-ENTITIES
-`;
+function buildEntities(
+  geometry: FloorPlanGeometry,
+  levelTitles?: Array<{ label: string; x: number; y: number }>
+): string {
+  let out = `0\nSECTION\n2\nENTITIES\n`;
 
-  // Multi-level handling: Use Z-axis elevation instead of horizontal spacing
-  const getZ = (level: number) => (level - 1) * 3000; // 3000mm per level
-
-  // 1. Draw room fills with hatch patterns
+  // 1. Room fills
   for (const room of geometry.rooms) {
-    const z = getZ(room.level);
-    const boundaryPoints: [number, number][] = [
-      [room.rect.x, room.rect.y],
-      [room.rect.x + room.rect.width, room.rect.y],
-      [room.rect.x + room.rect.width, room.rect.y + room.rect.height],
-      [room.rect.x, room.rect.y + room.rect.height],
-      [room.rect.x, room.rect.y], // Close the loop
-    ];
-
-    // Add subtle hatch fill
-    out += generateHatch(boundaryPoints, "SOLID", "ROOM_FILLS", 251);
+    out += buildRoomHatch(room);
   }
 
-  // 2. Draw each room boundary with XDATA metadata
-  for (const room of geometry.rooms) {
-    const z = getZ(room.level);
-    out += drawRoomBoundaryWithMetadata(room, "INTERIOR_WALLS", z);
-  }
-
-  // 3. Draw walls as thick polylines
+  // 2. Wall outlines (closed LWPOLYLINE — primary snap target)
   for (const wall of geometry.walls) {
-    const z = getZ(wall.level);
-    out += drawWallLineWithZ(wall, z);
+    out += buildWallOutline(wall);
   }
 
-  // 4. Draw openings using block inserts
+  // 3. Wall centerlines (dashed — tracing reference)
+  for (const wall of geometry.walls) {
+    out += dxfLine(wall.x1, wall.y1, wall.x2, wall.y2, "A-WALL-CNTR");
+  }
+
+  // 4. Openings (LINE segments — door/window snap targets)
   for (const opening of geometry.openings) {
-    const z = getZ(opening.level);
-    out += drawOpeningWithBlocks(opening, z);
+    out += buildOpening(opening);
   }
 
-  // 5. Draw room labels
+  // 5. Room labels
   for (const room of geometry.rooms) {
-    const z = getZ(room.level);
-    out += drawLabel(room.name, room.rect, z);
-    out += drawAreaLabel(room.actual_area_sqft, room.rect, z);
+    const cx = room.rect.x + room.rect.width  / 2;
+    const cy = room.rect.y + room.rect.height / 2;
+    out += dxfText(room.name, cx, cy + 150, 200, "A-TEXT");
+    out += dxfText(`${room.actual_area_sqft.toFixed(0)} sq ft`, cx, cy - 200, 150, "A-TEXT");
   }
 
-  // 6. Draw dimensions for major rooms
+  // 6. Dimension lines (rooms ≥ 50 sqft)
   for (const room of geometry.rooms) {
-    const z = getZ(room.level);
-    if (room.actual_area_sqft > 100) { // Only dimension larger rooms
-      out += drawRoomDimensions(room.rect, z);
+    if (room.actual_area_sqft >= 50) {
+      out += generateDimension(
+        room.rect.x, room.rect.y,
+        room.rect.x + room.rect.width, room.rect.y,
+        -600, "A-DIMS"
+      );
+      out += generateDimension(
+        room.rect.x, room.rect.y,
+        room.rect.x, room.rect.y + room.rect.height,
+        -600, "A-DIMS"
+      );
     }
   }
 
-  out += `0
-ENDSEC
-`;
+  // 7. Level titles (multi-story)
+  if (levelTitles) {
+    for (const t of levelTitles) {
+      out += dxfText(t.label, t.x, t.y, 500, "A-TEXT");
+    }
+  }
+
+  out += `0\nENDSEC\n`;
   return out;
 }
 
-/**
- * Draw room boundary with XDATA metadata
- */
-function drawRoomBoundaryWithMetadata(room: any, layer: string, z: number): string {
-  let out = lwpolylineWithZ(
-    [
-      [room.rect.x, room.rect.y],
-      [room.rect.x + room.rect.width, room.rect.y],
-      [room.rect.x + room.rect.width, room.rect.y + room.rect.height],
-      [room.rect.x, room.rect.y + room.rect.height],
-    ],
-    layer,
-    true,
-    z
-  );
+// ── Wall outline ────────────────────────────────────────────────────────────
 
-  // Attach XDATA
-  out += generateXData(room.id, room.name, room.actual_area_sqft, room.level);
-
-  return out;
-}
-
-/**
- * Draw wall line with Z-axis elevation
- */
-function drawWallLineWithZ(wall: WallSegment, z: number): string {
+function buildWallOutline(wall: WallSegment): string {
   const halfT = wall.thickness / 2;
+  const layer = wallLayer(wall);
   const isVertical = Math.abs(wall.x1 - wall.x2) < 1;
 
-  let out = "";
-
+  let pts: [number, number][];
   if (isVertical) {
-    // Vertical wall — offset in X
-    out += lwpolylineWithZ(
-      [
-        [wall.x1 - halfT, wall.y1],
-        [wall.x1 - halfT, wall.y2],
-      ],
-      wall.layer,
-      false,
-      z
-    );
-    out += lwpolylineWithZ(
-      [
-        [wall.x1 + halfT, wall.y1],
-        [wall.x1 + halfT, wall.y2],
-      ],
-      wall.layer,
-      false,
-      z
-    );
+    const yMin = Math.min(wall.y1, wall.y2);
+    const yMax = Math.max(wall.y1, wall.y2);
+    pts = [
+      [wall.x1 - halfT, yMin],
+      [wall.x1 + halfT, yMin],
+      [wall.x1 + halfT, yMax],
+      [wall.x1 - halfT, yMax],
+    ];
   } else {
-    // Horizontal wall — offset in Y
-    out += lwpolylineWithZ(
-      [
-        [wall.x1, wall.y1 - halfT],
-        [wall.x2, wall.y1 - halfT],
-      ],
-      wall.layer,
-      false,
-      z
-    );
-    out += lwpolylineWithZ(
-      [
-        [wall.x1, wall.y1 + halfT],
-        [wall.x2, wall.y1 + halfT],
-      ],
-      wall.layer,
-      false,
-      z
-    );
+    const xMin = Math.min(wall.x1, wall.x2);
+    const xMax = Math.max(wall.x1, wall.x2);
+    pts = [
+      [xMin, wall.y1 - halfT],
+      [xMax, wall.y1 - halfT],
+      [xMax, wall.y1 + halfT],
+      [xMin, wall.y1 + halfT],
+    ];
   }
 
-  return out;
+  return dxfLwpolyline(pts, layer, true);
 }
 
-/**
- * Draw opening using block inserts
- */
-function drawOpeningWithBlocks(opening: PlacedOpening, z: number): string {
-  let out = "";
-  const isVertical = opening.angle === 90;
-  const rotation = isVertical ? 90 : 0;
+// ── Opening ─────────────────────────────────────────────────────────────────
 
-  if (opening.type === "door" || opening.type === "sliding_door" || opening.type === "double_door") {
-    // Use DOOR_SWING block
-    out += insertBlock("DOOR_SWING", opening.x, opening.y, rotation, "DOORS");
-  } else if (opening.type === "window") {
-    // Use WINDOW_SINGLE or WINDOW_DOUBLE block
-    const blockName = opening.width > 1500 ? "WINDOW_DOUBLE" : "WINDOW_SINGLE";
-    out += insertBlock(blockName, opening.x, opening.y, rotation, "WINDOWS");
-  } else {
-    // Fallback to line drawing for other types
-    if (isVertical) {
-      out += lwpolylineWithZ(
-        [
-          [opening.x, opening.y],
-          [opening.x, opening.y + opening.width],
-        ],
-        opening.layer,
-        false,
-        z
-      );
-    } else {
-      out += lwpolylineWithZ(
-        [
-          [opening.x, opening.y],
-          [opening.x + opening.width, opening.y],
-        ],
-        opening.layer,
-        false,
-        z
-      );
-    }
+function buildOpening(opening: PlacedOpening): string {
+  const layer = openingLayer(opening.type);
+  if (opening.angle === 90) {
+    return dxfLine(opening.x, opening.y, opening.x, opening.y + opening.width, layer);
   }
-
-  return out;
+  return dxfLine(opening.x, opening.y, opening.x + opening.width, opening.y, layer);
 }
 
-/**
- * Draw dimensions for a room
- */
-function drawRoomDimensions(rect: Rect, z: number): string {
-  let out = "";
+// ── Room hatch ──────────────────────────────────────────────────────────────
 
-  // Horizontal dimension (width)
-  out += generateDimension(
-    rect.x,
-    rect.y,
-    rect.x + rect.width,
-    rect.y,
-    -500, // Offset above
-    "DIMENSIONS"
-  );
-
-  // Vertical dimension (height)
-  out += generateDimension(
-    rect.x,
-    rect.y,
-    rect.x,
-    rect.y + rect.height,
-    -500, // Offset to left
-    "DIMENSIONS"
-  );
-
-  return out;
-}
-
-/**
- * Draw room boundary as closed LWPOLYLINE
- */
-function drawRoomBoundary(rect: Rect, layer: string): string {
-  return lwpolyline(
-    [
-      [rect.x, rect.y],
-      [rect.x + rect.width, rect.y],
-      [rect.x + rect.width, rect.y + rect.height],
-      [rect.x, rect.y + rect.height],
-    ],
-    layer,
-    true
-  );
-}
-
-/**
- * Draw room name label
- */
-function drawLabel(text: string, rect: Rect, z: number = 0): string {
-  const centerX = rect.x + rect.width / 2;
-  const centerY = rect.y + rect.height / 2 + 100; // slightly above center
-
-  return `0
-TEXT
-8
-LABELS
-10
-${centerX.toFixed(1)}
-20
-${centerY.toFixed(1)}
-30
-${z.toFixed(1)}
-40
-200.0
-1
-${text}
-72
-1
-11
-${centerX.toFixed(1)}
-21
-${centerY.toFixed(1)}
-31
-${z.toFixed(1)}
-`;
-}
-
-/**
- * Draw area label below room name
- */
-function drawAreaLabel(areaSqft: number, rect: Rect, z: number = 0): string {
-  const centerX = rect.x + rect.width / 2;
-  const centerY = rect.y + rect.height / 2 - 200; // below center
-
-  return `0
-TEXT
-8
-LABELS
-10
-${centerX.toFixed(1)}
-20
-${centerY.toFixed(1)}
-30
-${z.toFixed(1)}
-40
-150.0
-1
-${areaSqft.toFixed(1)} sq ft
-72
-1
-11
-${centerX.toFixed(1)}
-21
-${centerY.toFixed(1)}
-31
-${z.toFixed(1)}
-`;
-}
-
-// ── DXF Primitive: LWPOLYLINE with Z-axis support ──
-
-function lwpolylineWithZ(
-  points: [number, number][],
-  layer: string,
-  closed: boolean,
-  z: number = 0
-): string {
-  let out = `0
-LWPOLYLINE
-8
-${layer}
-38
-${z.toFixed(1)}
-90
-${points.length}
-70
-${closed ? 1 : 0}
-`;
-
-  for (const [x, y] of points) {
-    out += `10
-${x.toFixed(1)}
-20
-${y.toFixed(1)}
-`;
-  }
-
-  return out;
-}
-
-// ── DXF Primitive: LWPOLYLINE ──
-
-function lwpolyline(
-  points: [number, number][],
-  layer: string,
-  closed: boolean
-): string {
-  return lwpolylineWithZ(points, layer, closed, 0);
+function buildRoomHatch(room: PlacedRoom): string {
+  const pts: [number, number][] = [
+    [room.rect.x,                    room.rect.y],
+    [room.rect.x + room.rect.width,  room.rect.y],
+    [room.rect.x + room.rect.width,  room.rect.y + room.rect.height],
+    [room.rect.x,                    room.rect.y + room.rect.height],
+  ];
+  return generateHatch(pts, "SOLID", "A-ROOM", ACI.LTGREY);
 }

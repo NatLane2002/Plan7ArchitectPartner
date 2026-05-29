@@ -42,7 +42,7 @@ export interface PlacedOpening {
   height: number;
   angle: number; 
   level: number;
-  layer: "DOORS" | "WINDOWS";
+  layer: "DOORS" | "WINDOWS" | "GARAGE_DOORS" | "DOUBLE_DOORS";
   room1: string;
   room2: string;
 }
@@ -362,13 +362,17 @@ function placeOpenings(
 
     if (!room1) continue;
 
-    const openingWidth = opening.width_mm ?? (opening.type === "door" ? 900 : 1200);
+    const openingWidth = opening.width_mm ?? (opening.type === "door" ? 900 : opening.type === "garage_door" ? 2400 : 1200);
     const level = room1.level;
 
     if (!room2 || roomId2 === "exterior") {
        const extOpening = placeOnExteriorWall(room1, walls, opening, openingWidth, extThickness);
        if (extOpening) {
          extOpening.level = level;
+         // Preserve the exact original type so the SVG renderer and DXF writer
+         // can assign the correct color and layer (garage_door → amber, GARAGE_DOORS layer)
+         extOpening.type = opening.type;
+         extOpening.layer = resolveLayer(opening.type);
          placed.push(extOpening);
        }
        continue;
@@ -396,8 +400,10 @@ function placeOpenings(
     const centerX = (edge.x1 + edge.x2) / 2;
     const centerY = (edge.y1 + edge.y2) / 2;
 
-    // Force interior connections to be doors, strictly preventing internal windows
-    const safeType = "door";
+    // Interior connections are always doors — windows between interior rooms are
+    // architecturally invalid and were already blocked by Zod validation upstream.
+    // Preserve archway/pocket_door/sliding_door types for interior connections.
+    const safeType = opening.type === "window" ? "door" : opening.type;
 
     placed.push({
       type: safeType,
@@ -407,7 +413,7 @@ function placeOpenings(
       height: 50,
       angle: isVertical ? 90 : 0,
       level,
-      layer: "DOORS",
+      layer: resolveLayer(safeType),
       room1: roomId1,
       room2: roomId2,
     });
@@ -415,6 +421,27 @@ function placeOpenings(
   return placed;
 }
 
+/**
+ * Resolve the correct DXF layer for an opening type.
+ * This is the single source of truth — used by both placeOpenings and placeOnExteriorWall.
+ */
+function resolveLayer(type: string): "DOORS" | "WINDOWS" | "GARAGE_DOORS" | "DOUBLE_DOORS" {
+  if (type === "window") return "WINDOWS";
+  if (type === "garage_door") return "GARAGE_DOORS";
+  if (type === "double_door") return "DOUBLE_DOORS";
+  return "DOORS";
+}
+
+/**
+ * Place an opening on an exterior wall of a room.
+ *
+ * GARAGE DOOR PLACEMENT LOGIC:
+ * A garage door must go on the widest available exterior face of the garage room.
+ * This prevents the door from appearing on a narrow side wall where no car could fit.
+ * We collect ALL valid candidate wall segments, score them by their overlap length
+ * with the room boundary, and select the longest one. For non-garage openings we
+ * still prefer the widest face but fall back gracefully to any valid segment.
+ */
 function placeOnExteriorWall(
   room: PlacedRoom,
   walls: WallSegment[],
@@ -423,59 +450,89 @@ function placeOnExteriorWall(
   extThickness: number
 ): PlacedOpening | null {
   const r = room.rect;
-  
-  // Find all true EXTERIOR_WALLS segments that overlap with this room's physical boundary
+
+  // Find all EXTERIOR_WALLS segments on this level
   const extWalls = walls.filter(w => w.layer === "EXTERIOR_WALLS" && w.level === room.level);
-  
+
   const roomBounds = {
     minX: r.x,
     maxX: r.x + r.width,
     minY: r.y,
-    maxY: r.y + r.height
+    maxY: r.y + r.height,
   };
 
-  // Dynamic tolerance: half of exterior wall thickness
+  // Tolerance: half of exterior wall thickness
   const tol = extThickness * 0.5;
-  
-  // Try to find a valid segment matching this room
+
+  // ── Candidate collection ──
+  // Each candidate records the wall segment, its overlap span, and the resulting opening position.
+  interface Candidate {
+    overlapLength: number;
+    result: PlacedOpening;
+  }
+  const candidates: Candidate[] = [];
+
   for (const w of extWalls) {
     const isVertical = Math.abs(w.x1 - w.x2) < 1;
+
     if (isVertical) {
-       if (Math.abs(w.x1 - roomBounds.minX) < tol || Math.abs(w.x1 - roomBounds.maxX) < tol) {
-          const overlapMin = Math.max(Math.min(w.y1, w.y2), roomBounds.minY);
-          const overlapMax = Math.min(Math.max(w.y1, w.y2), roomBounds.maxY);
-          if (overlapMax - overlapMin > openingWidth) {
-             return {
-                type: opening.type,
-                x: w.x1,
-                y: (overlapMin + overlapMax) / 2 - openingWidth / 2,
-                width: openingWidth, height: 50, angle: 90,
-                level: room.level,
-                layer: opening.type === "door" ? "DOORS" : "WINDOWS",
-                room1: opening.connecting[0],
-                room2: "exterior"
-             };
-          }
-       }
+      // Left or right wall of the room
+      if (Math.abs(w.x1 - roomBounds.minX) < tol || Math.abs(w.x1 - roomBounds.maxX) < tol) {
+        const overlapMin = Math.max(Math.min(w.y1, w.y2), roomBounds.minY);
+        const overlapMax = Math.min(Math.max(w.y1, w.y2), roomBounds.maxY);
+        const overlapLength = overlapMax - overlapMin;
+        if (overlapLength > openingWidth) {
+          candidates.push({
+            overlapLength,
+            result: {
+              type: opening.type,
+              x: w.x1,
+              y: (overlapMin + overlapMax) / 2 - openingWidth / 2,
+              width: openingWidth,
+              height: 50,
+              angle: 90,
+              level: room.level,
+              layer: resolveLayer(opening.type),
+              room1: opening.connecting[0],
+              room2: "exterior",
+            },
+          });
+        }
+      }
     } else {
-       if (Math.abs(w.y1 - roomBounds.minY) < tol || Math.abs(w.y1 - roomBounds.maxY) < tol) {
-          const overlapMin = Math.max(Math.min(w.x1, w.x2), roomBounds.minX);
-          const overlapMax = Math.min(Math.max(w.x1, w.x2), roomBounds.maxX);
-          if (overlapMax - overlapMin > openingWidth) {
-             return {
-                type: opening.type,
-                x: (overlapMin + overlapMax) / 2 - openingWidth / 2,
-                y: w.y1,
-                width: openingWidth, height: 50, angle: 0,
-                level: room.level,
-                layer: opening.type === "door" ? "DOORS" : "WINDOWS",
-                room1: opening.connecting[0],
-                room2: "exterior"
-             };
-          }
-       }
+      // Top or bottom wall of the room
+      if (Math.abs(w.y1 - roomBounds.minY) < tol || Math.abs(w.y1 - roomBounds.maxY) < tol) {
+        const overlapMin = Math.max(Math.min(w.x1, w.x2), roomBounds.minX);
+        const overlapMax = Math.min(Math.max(w.x1, w.x2), roomBounds.maxX);
+        const overlapLength = overlapMax - overlapMin;
+        if (overlapLength > openingWidth) {
+          candidates.push({
+            overlapLength,
+            result: {
+              type: opening.type,
+              x: (overlapMin + overlapMax) / 2 - openingWidth / 2,
+              y: w.y1,
+              width: openingWidth,
+              height: 50,
+              angle: 0,
+              level: room.level,
+              layer: resolveLayer(opening.type),
+              room1: opening.connecting[0],
+              room2: "exterior",
+            },
+          });
+        }
+      }
     }
   }
 
-  return null;
+  if (candidates.length === 0) return null;
+
+  // ── Candidate selection ──
+  // For garage doors: always pick the candidate with the longest overlap (widest face).
+  // This guarantees the door goes on the front/back of the garage, not a narrow side.
+  // For all other openings: same strategy — widest face is the most architecturally
+  // sensible default and avoids the narrow-side problem for any opening type.
+  candidates.sort((a, b) => b.overlapLength - a.overlapLength);
+  return candidates[0].result;
 }
