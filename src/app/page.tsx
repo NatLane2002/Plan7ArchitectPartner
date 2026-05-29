@@ -33,12 +33,44 @@ interface PreviewData {
 
 type AppStatus = "idle" | "generating" | "preview" | "downloading" | "error";
 
+// ── Legend Item Component ──
+interface LegendItemProps {
+  color: string;
+  strokeWidth: number;
+  label: string;
+  dashed?: boolean;
+}
+
+function LegendItem({ color, strokeWidth, label, dashed = false }: LegendItemProps) {
+  return (
+    <div className="canvas-legend-item">
+      <svg width="24" height="12" viewBox="0 0 24 12" aria-hidden="true">
+        <line
+          x1="0"
+          y1="6"
+          x2="24"
+          y2="6"
+          stroke={color}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={dashed ? "4 3" : undefined}
+        />
+      </svg>
+      <span className="canvas-legend-label" style={{ color }}>{label}</span>
+    </div>
+  );
+}
+
 export default function Home() {
   // ── State ──
   const [naturalLanguage, setNaturalLanguage] = useState(
     "I need a 1500 sqft Modern Farmhouse with 3 bedrooms, 2 bathrooms, an open layout kitchen, and an office. Master bedroom needs a walk-in closet."
   );
-  
+
+  // ── Input mode: text description vs. image-based blueprint ──
+  type InputMode = "text" | "image";
+  const [inputMode, setInputMode] = useState<InputMode>("text");
+
   const [generatedPrompt, setGeneratedPrompt] = useState("");
   const [pastedJson, setPastedJson] = useState("");
   const [status, setStatus] = useState<AppStatus>("idle");
@@ -46,7 +78,13 @@ export default function Home() {
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const roomItemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [highlightedRoomKey, setHighlightedRoomKey] = useState<string | null>(null);
+  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // ── Timer for loading state ──
   useEffect(() => {
@@ -63,23 +101,144 @@ export default function Home() {
     };
   }, [status]);
 
+  // ── SVG room click → scroll Space Breakdown to that room ──
+  function handleSvgClick(e: React.MouseEvent<HTMLDivElement>) {
+    const target = e.target as Element;
+    // Hit-area rects are bare <rect class="room-hit-area"> with data-room-key
+    const key = target.getAttribute("data-room-key");
+    if (!key) return;
+
+    // Scroll the sidebar room item into view
+    const el = roomItemRefs.current.get(key);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    // Flash the sidebar item highlight
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlightedRoomKey(key);
+    highlightTimerRef.current = setTimeout(() => setHighlightedRoomKey(null), 1200);
+
+    // Flash the SVG room fill (the <g> with matching data-room-key)
+    if (canvasRef.current) {
+      const svgGroup = canvasRef.current.querySelector<SVGGElement>(`.preview-room-group[data-room-key="${CSS.escape(key)}"]`);
+      if (svgGroup) {
+        svgGroup.classList.remove("room-flashing");
+        void (svgGroup as unknown as HTMLElement).offsetWidth;
+        svgGroup.classList.add("room-flashing");
+        svgGroup.addEventListener("animationend", () => svgGroup.classList.remove("room-flashing"), { once: true });
+      }
+    }
+  }
+
   // ── Generate AI Prompt ──
   function handleGeneratePrompt() {
     const schemaInstructions = getPromptSystemInstruction();
-    const prompt = `--- AI ARCHITECT INSTRUCTIONS ---
+
+    if (inputMode === "image") {
+      const prompt = `--- AI ARCHITECT INSTRUCTIONS ---
+${schemaInstructions}
+
+--- TASK: EXTRACT FLOOR PLAN FROM IMAGE ---
+I am attaching an image of a house floor plan, blueprint, or layout sketch.
+
+Your task is to analyze the image with full architectural precision and convert it into the exact JSON schema defined above. This JSON will be fed directly into a CAD pre-processor — every field must be correct.
+
+════════════════════════════════════════════════════════════
+EXTRACTION PROCESS (follow in order)
+════════════════════════════════════════════════════════════
+
+STEP 1 — IDENTIFY ALL SPACES
+Catalog every distinct space visible: bedrooms, bathrooms, kitchen, living areas, dining, hallways, entry, garage, utility rooms, closets, offices, outdoor areas. Include every labeled or implied space, no matter how small.
+
+STEP 2 — EXTRACT OR ESTIMATE DIMENSIONS
+- If the image has a scale bar or labeled dimensions (e.g. "12' × 14'"), use those exact values for width_ft and length_ft.
+- If no dimensions are labeled, estimate proportionally: identify the largest room, assign it a realistic size (e.g. a master bedroom is typically 12–16 ft wide), then scale all other rooms relative to it.
+- All width_ft and length_ft values must be integers ≥ 3.
+
+STEP 3 — ASSIGN GRID COORDINATES
+Place every room on the 1-foot Cartesian grid (grid_x = left→right, grid_y = top→bottom):
+- Start at grid_x=0, grid_y=0 for the top-left room.
+- Rooms must tile perfectly: if Room A is at grid_x=0 with width_ft=14, the room directly to its right starts at grid_x=14.
+- No two rooms on the same level may share any grid cell.
+- No gaps between adjacent rooms — edges must touch exactly.
+- Use hallway rooms (room_type: "hallway") to fill any circulation space between rooms.
+
+STEP 4 — MULTI-STORY HANDLING
+- If the image shows multiple floors (labeled "First Floor", "Second Floor", etc.), assign level=1 to ground floor rooms and level=2 to upper floor rooms.
+- Level 2 rooms use the SAME grid coordinate space as Level 1 (they stack vertically, not side-by-side).
+- Any stairwell must appear on BOTH levels with identical grid_x, grid_y, width_ft, length_ft.
+- Set stories to the total number of floors shown.
+
+STEP 5 — MAP ALL OPENINGS
+For every door, window, archway, or garage door visible:
+- Assign the correct type: "door", "window", "sliding_door", "double_door", "archway", "pocket_door", or "garage_door".
+- Set connecting to the two room IDs it links, or ["room_id", "exterior"] for exterior openings.
+- Windows ALWAYS connect to "exterior" — never between two interior rooms.
+- Garage openings to the outside MUST use type "garage_door", never "door".
+- Use "double_door" for grand entries or any opening wider than 1500mm.
+- Every interior room must be reachable via at least one door or archway.
+
+STEP 6 — INFER METADATA
+- project_title: derive from any visible label, or use a descriptive name like "Extracted 3-Bedroom Ranch".
+- architectural_style: infer from the layout shape, room arrangement, and any visible labels (e.g. "Ranch", "Colonial", "Craftsman", "Contemporary").
+- footprint_dimensions.width and .length: total exterior bounding box in millimeters (1 ft = 304.8 mm).
+- footprint_dimensions.total_area_sqft_calculated: must equal the exact sum of (width_ft × length_ft) for every room listed.
+- exterior_wall_thickness_mm: use 250 unless the image indicates otherwise.
+- interior_wall_thickness_mm: use 120 unless the image indicates otherwise.
+
+════════════════════════════════════════════════════════════
+SELF-CHECK BEFORE OUTPUTTING
+════════════════════════════════════════════════════════════
+□ Does total_area_sqft_calculated equal the exact sum of all (width_ft × length_ft)?
+□ Are all room IDs unique snake_case strings?
+□ Are all opening IDs unique snake_case strings?
+□ Do any two rooms on the same level share a grid cell? (They must not.)
+□ Does every interior room connect to at least one adjacent room via a door or archway?
+□ Do all windows connect only to "exterior"?
+□ Does every garage room have a "garage_door" (not "door") to "exterior"?
+□ Are all enum values spelled exactly as listed in the schema?
+□ Is the output raw JSON with zero markdown, zero explanation?
+
+Output ONLY the raw JSON object. Nothing before it, nothing after it.`;
+      setGeneratedPrompt(prompt);
+    } else {
+      const prompt = `--- AI ARCHITECT INSTRUCTIONS ---
 ${schemaInstructions}
 
 --- CLIENT REQUEST ---
 Please generate the JSON floor plan based exactly on this client requirement:
 "${naturalLanguage}"
 `;
-    setGeneratedPrompt(prompt);
+      setGeneratedPrompt(prompt);
+    }
   }
 
   // ── Copy to Clipboard ──
   function handleCopyPrompt() {
-    navigator.clipboard.writeText(generatedPrompt);
-    alert("Prompt copied to clipboard! Paste this into Gemini.");
+    navigator.clipboard.writeText(generatedPrompt).then(() => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      setCopyState("copied");
+      copyTimerRef.current = setTimeout(() => setCopyState("idle"), 2000);
+    });
+  }
+
+  // ── Reset workspace ──
+  function handleReset() {
+    setGeneratedPrompt("");
+    setPastedJson("");
+    setPreviewData(null);
+    setStatus("idle");
+    setError(null);
+    setHighlightedRoomKey(null);
+  }
+
+  // ── Strip markdown fences from AI JSON output ──
+  function stripMarkdownFences(raw: string): string {
+    return raw
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```\s*$/, "")
+      .trim();
   }
 
   // ── Generate Preview from pasted JSON ──
@@ -94,11 +253,11 @@ Please generate the JSON floor plan based exactly on this client requirement:
 
     let parsedBody;
     try {
-      parsedBody = JSON.parse(pastedJson);
+      parsedBody = JSON.parse(stripMarkdownFences(pastedJson));
       parsedBody._preview = true;
     } catch (e) {
       setStatus("error");
-      setError("Invalid JSON format. Please ensure you copied the exact JSON structure from Gemini.");
+      setError("Invalid JSON format. Please ensure you copied the exact JSON structure from the AI (markdown code fences are stripped automatically).");
       return;
     }
 
@@ -131,7 +290,7 @@ Please generate the JSON floor plan based exactly on this client requirement:
 
     let parsedBody;
     try {
-      parsedBody = JSON.parse(pastedJson);
+      parsedBody = JSON.parse(stripMarkdownFences(pastedJson));
       parsedBody._preview = false;
     } catch (e) {
       setStatus("error");
@@ -231,19 +390,92 @@ Please generate the JSON floor plan based exactly on this client requirement:
                 <div className="step-badge step-badge-1">1</div>
                 <h2 className="section-title">Describe Floor Plan</h2>
               </div>
-              <textarea
-                className="workflow-textarea"
-                value={naturalLanguage}
-                onChange={(e) => setNaturalLanguage(e.target.value)}
-                placeholder="Describe your floor plan in plain English..."
-                rows={4}
-                aria-label="Floor plan description"
-              />
+
+              {/* Mode Toggle */}
+              <div className="input-mode-toggle" role="group" aria-label="Input mode">
+                <button
+                  type="button"
+                  className={`mode-toggle-btn ${inputMode === "text" ? "mode-toggle-btn-active" : ""}`}
+                  onClick={() => { setInputMode("text"); setGeneratedPrompt(""); }}
+                  aria-pressed={inputMode === "text"}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M17 6.1H3M21 12.1H3M15.1 18H3" />
+                  </svg>
+                  Text
+                </button>
+                <button
+                  type="button"
+                  className={`mode-toggle-btn ${inputMode === "image" ? "mode-toggle-btn-active" : ""}`}
+                  onClick={() => { setInputMode("image"); setGeneratedPrompt(""); }}
+                  aria-pressed={inputMode === "image"}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="21 15 16 10 5 21" />
+                  </svg>
+                  From Image
+                </button>
+              </div>
+
+              {inputMode === "text" ? (
+                <>
+                  <textarea
+                    className="workflow-textarea"
+                    value={naturalLanguage}
+                    onChange={(e) => setNaturalLanguage(e.target.value)}
+                    placeholder="Describe your floor plan in plain English..."
+                    rows={4}
+                    aria-label="Floor plan description"
+                  />
+                  {/* Style quick-picks */}
+                  <div className="style-chips" role="group" aria-label="Architectural style quick-picks">
+                    {["Modern Farmhouse", "Mid-Century Modern", "Colonial", "Craftsman", "Contemporary", "Ranch"].map((style) => (
+                      <button
+                        key={style}
+                        type="button"
+                        className="style-chip"
+                        onClick={() => {
+                          setNaturalLanguage((prev) => {
+                            const cleaned = prev.replace(/,?\s*(Modern Farmhouse|Mid-Century Modern|Colonial|Craftsman|Contemporary|Ranch)\s*style/gi, "").trim();
+                            return cleaned ? `${cleaned}, ${style} style` : `${style} style`;
+                          });
+                        }}
+                        aria-label={`Apply ${style} style`}
+                      >
+                        {style}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="image-mode-info">
+                  <div className="image-mode-info-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                  </div>
+                  <p className="image-mode-info-title">Blueprint / Layout Image</p>
+                  <p className="image-mode-info-body">
+                    Click <strong>Generate LLM Prompt</strong> to get a precision extraction prompt. Then paste it into a vision-capable AI — Gemini, GPT-4o, or Claude — along with your image.
+                  </p>
+                  <ul className="image-mode-info-list" aria-label="Accepted image types">
+                    <li>Floor plan sketches</li>
+                    <li>Architectural blueprints</li>
+                    <li>Real estate listing layouts</li>
+                    <li>Hand-drawn or digital plans</li>
+                  </ul>
+                </div>
+              )}
+
               <button
                 type="button"
                 className="workflow-button workflow-button-secondary"
                 onClick={handleGeneratePrompt}
-                disabled={!naturalLanguage.trim()}
+                disabled={inputMode === "text" && !naturalLanguage.trim()}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
@@ -259,24 +491,40 @@ Please generate the JSON floor plan based exactly on this client requirement:
                   <div className="step-badge step-badge-2">2</div>
                   <h2 className="section-title">Take to AI Assistant</h2>
                 </div>
-                <div className="relative">
-                  <textarea
-                    readOnly
-                    value={generatedPrompt}
-                    className="workflow-textarea workflow-textarea-readonly"
-                    rows={6}
-                    aria-label="Generated AI prompt"
-                  />
-                  <button 
-                    type="button"
-                    onClick={handleCopyPrompt} 
-                    className="absolute top-2 right-2 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold rounded-md shadow-sm transition-colors"
-                  >
-                    Copy
-                  </button>
-                </div>
+                <textarea
+                  readOnly
+                  value={generatedPrompt}
+                  className="workflow-textarea workflow-textarea-readonly"
+                  rows={6}
+                  aria-label="Generated AI prompt"
+                />
+                <button
+                  type="button"
+                  onClick={handleCopyPrompt}
+                  className={`workflow-button ${copyState === "copied" ? "workflow-button-copied" : "workflow-button-copy"}`}
+                  aria-live="polite"
+                >
+                  {copyState === "copied" ? (
+                    <>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                      Copy Prompt
+                    </>
+                  )}
+                </button>
                 <p className="workflow-hint">
-                  Paste into Gemini, ChatGPT, or Claude
+                  {inputMode === "image"
+                    ? "Paste prompt + attach your image into Gemini, GPT-4o, or Claude"
+                    : "Paste into Gemini, ChatGPT, or Claude"}
                 </p>
               </section>
             )}
@@ -287,15 +535,34 @@ Please generate the JSON floor plan based exactly on this client requirement:
                 <div className="step-badge step-badge-3">3</div>
                 <h2 className="section-title">Paste AI JSON Result</h2>
               </div>
-              <textarea
-                className="workflow-textarea workflow-textarea-code"
-                value={pastedJson}
-                onChange={(e) => setPastedJson(e.target.value)}
-                placeholder='{\n  "project_title": "...",\n  "rooms": [...]\n}'
-                rows={10}
-                spellCheck={false}
-                aria-label="AI JSON output"
-              />
+              <div className="json-input-wrapper">
+                <textarea
+                  className="workflow-textarea workflow-textarea-code"
+                  value={pastedJson}
+                  onChange={(e) => setPastedJson(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      if (pastedJson.trim() && status !== "generating" && status !== "downloading") {
+                        handlePreview();
+                      }
+                    }
+                  }}
+                  placeholder={'{\n  "project_title": "...",\n  "rooms": [...]\n}'}
+                  rows={10}
+                  spellCheck={false}
+                  aria-label="AI JSON output — press Ctrl+Enter to validate"
+                />
+                {pastedJson.trim() && (
+                  <div className="json-meta-bar">
+                    <span className="json-meta-chars">{pastedJson.trim().length.toLocaleString()} chars</span>
+                    {pastedJson.trim().startsWith("```") && (
+                      <span className="json-meta-strip">Markdown fences will be auto-stripped</span>
+                    )}
+                    <span className="json-meta-hint">Ctrl+Enter to validate</span>
+                  </div>
+                )}
+              </div>
               
               <button
                 type="button"
@@ -356,6 +623,18 @@ Please generate the JSON floor plan based exactly on this client requirement:
                 </span>
                 <button
                   type="button"
+                  onClick={handleReset}
+                  className="p-1.5 rounded hover:bg-white/5 transition-colors text-zinc-600 hover:text-zinc-400"
+                  title="Reset workspace"
+                  aria-label="Reset workspace"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIsFullscreen(true)}
                   className="p-1.5 rounded hover:bg-white/5 transition-colors text-zinc-500 hover:text-zinc-300"
                   title="Enter Fullscreen"
@@ -398,14 +677,34 @@ Please generate the JSON floor plan based exactly on this client requirement:
             )}
 
             {previewData && (
-              <div className="canvas-preview">
+              <div
+                className="canvas-preview"
+                onClick={handleSvgClick}
+              >
                 <div className="canvas-overlay-label">
                   {previewData.metadata.project_title} - {previewData.metadata.architectural_style}
                 </div>
-                <div dangerouslySetInnerHTML={{ __html: previewData.preview }} className="w-full h-full" />
+                <div ref={canvasRef} dangerouslySetInnerHTML={{ __html: previewData.preview }} className="canvas-svg-wrapper" />
               </div>
             )}
           </div>
+
+          {/* ── Floor Plan Legend — lives BELOW the SVG, never overlaps ── */}
+          {previewData && (
+            <div className="canvas-legend" role="legend" aria-label="Floor plan legend">
+              <LegendItem color="#e4e4e7" strokeWidth={3} label="Exterior Walls" />
+              <div className="canvas-legend-divider" />
+              <LegendItem color="#a1a1aa" strokeWidth={2} label="Interior Walls" />
+              <div className="canvas-legend-divider" />
+              <LegendItem color="#b91c1c" strokeWidth={2} label="Doors" />
+              <div className="canvas-legend-divider" />
+              <LegendItem color="#c026d3" strokeWidth={3} label="Double Doors" />
+              <div className="canvas-legend-divider" />
+              <LegendItem color="#60a5fa" strokeWidth={2.5} label="Windows" dashed />
+              <div className="canvas-legend-divider" />
+              <LegendItem color="#f59e0b" strokeWidth={3.5} label="Garage Doors" />
+            </div>
+          )}
         </section>
 
         {/* ─── RIGHT SIDEBAR: Inspector & Export Pane ─── */}
@@ -426,15 +725,64 @@ Please generate the JSON floor plan based exactly on this client requirement:
                     {[...new Set(previewData.metadata.rooms.map((r) => r.level))].sort().map((level) => (
                       <div key={level} className="space-y-2">
                         <div className="level-label">LEVEL {level}</div>
-                        {previewData.metadata.rooms.filter(r => r.level === level).map((room, i) => (
-                          <div key={i} className="room-item">
-                            <span className="room-name">{room.name}</span>
-                            <div className="room-metrics">
-                              <span className="room-metric-label">Target: {room.target_sqft} ft²</span>
-                              <span className="room-metric-value">{room.actual_sqft} ft²</span>
+                        {previewData.metadata.rooms.filter(r => r.level === level).map((room, i) => {
+                          const key = `${room.name}__L${room.level}`;
+                          const isHighlighted = highlightedRoomKey === key;
+                          return (
+                            <div
+                              key={i}
+                              ref={(el) => {
+                                if (el) roomItemRefs.current.set(key, el);
+                                else roomItemRefs.current.delete(key);
+                              }}
+                              className={`room-item cursor-pointer rounded transition-all duration-300 ${
+                                isHighlighted
+                                  ? "bg-indigo-500/20 ring-1 ring-indigo-500/50"
+                                  : "hover:bg-white/5"
+                              }`}
+                              onClick={() => {
+                                // Sidebar click → flash the SVG room
+                                if (canvasRef.current) {
+                                  const svgGroup = canvasRef.current.querySelector<SVGGElement>(`.preview-room-group[data-room-key="${CSS.escape(key)}"]`);
+                                  if (svgGroup) {
+                                    svgGroup.classList.remove("room-flashing");
+                                    void (svgGroup as unknown as HTMLElement).offsetWidth;
+                                    svgGroup.classList.add("room-flashing");
+                                    svgGroup.addEventListener("animationend", () => svgGroup.classList.remove("room-flashing"), { once: true });
+                                  }
+                                }
+                              }}
+                            >
+                              <span className="room-name">{room.name}</span>
+                              <div className="room-metrics">
+                                <div className="room-metrics-row">
+                                  <span className="room-metric-label">Target</span>
+                                  <span className="room-metric-label">Actual</span>
+                                </div>
+                                <div className="room-metrics-row">
+                                  <span className="room-metric-value">{room.target_sqft} ft²</span>
+                                  <span className={`room-metric-value ${
+                                    room.actual_sqft === 0 ? "text-zinc-600" :
+                                    Math.abs(room.actual_sqft - room.target_sqft) / Math.max(room.target_sqft, 1) < 0.05 ? "text-emerald-400" :
+                                    Math.abs(room.actual_sqft - room.target_sqft) / Math.max(room.target_sqft, 1) < 0.15 ? "text-amber-400" :
+                                    "text-red-400"
+                                  }`}>{room.actual_sqft} ft²</span>
+                                </div>
+                                {/* Accuracy bar */}
+                                <div className="room-accuracy-bar-track" aria-hidden="true">
+                                  <div
+                                    className={`room-accuracy-bar-fill ${
+                                      Math.abs(room.actual_sqft - room.target_sqft) / Math.max(room.target_sqft, 1) < 0.05 ? "room-accuracy-bar-good" :
+                                      Math.abs(room.actual_sqft - room.target_sqft) / Math.max(room.target_sqft, 1) < 0.15 ? "room-accuracy-bar-warn" :
+                                      "room-accuracy-bar-bad"
+                                    }`}
+                                    style={{ width: `${Math.min(100, (room.actual_sqft / Math.max(room.target_sqft, 1)) * 100).toFixed(1)}%` }}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ))}
                   </div>
@@ -548,7 +896,24 @@ Please generate the JSON floor plan based exactly on this client requirement:
             <div className="canvas-overlay-label">
               {previewData.metadata.project_title} - {previewData.metadata.architectural_style}
             </div>
-            <div dangerouslySetInnerHTML={{ __html: previewData.preview }} className="w-full h-full [&>svg]:w-full [&>svg]:h-full" />
+            <div
+              dangerouslySetInnerHTML={{ __html: previewData.preview }}
+              className="w-full h-full [&>svg]:w-full [&>svg]:h-full"
+            />
+          </div>
+          {/* Legend in fullscreen — same HTML bar, never overlaps */}
+          <div className="canvas-legend canvas-legend-fullscreen" role="legend" aria-label="Floor plan legend">
+            <LegendItem color="#e4e4e7" strokeWidth={3} label="Exterior Walls" />
+            <div className="canvas-legend-divider" />
+            <LegendItem color="#a1a1aa" strokeWidth={2} label="Interior Walls" />
+            <div className="canvas-legend-divider" />
+            <LegendItem color="#b91c1c" strokeWidth={2} label="Doors" />
+            <div className="canvas-legend-divider" />
+            <LegendItem color="#c026d3" strokeWidth={3} label="Double Doors" />
+            <div className="canvas-legend-divider" />
+            <LegendItem color="#60a5fa" strokeWidth={2.5} label="Windows" dashed />
+            <div className="canvas-legend-divider" />
+            <LegendItem color="#f59e0b" strokeWidth={3.5} label="Garage Doors" />
           </div>
         </div>
       </>
